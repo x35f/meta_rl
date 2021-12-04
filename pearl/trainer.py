@@ -161,8 +161,8 @@ class PEARLTrainer(BaseTrainer):
         #clear z inference
         self.agent.clear_z(num_tasks=len(train_task_indices))
         
-        #perform update on context and data
-        loss_dict = self.agent.update(context_batch, data_batch)
+        #perform update on context and data, and also passes task indices for log
+        loss_dict = self.agent.update(train_task_indices, context_batch, data_batch)
         
         return loss_dict
 

@@ -81,7 +81,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.update_target_network_interval = update_target_network_interval
         self.target_smoothing_tau = target_smoothing_tau
 
-    def update(self, context_batch, data_batch):
+    def update(self, train_task_indices, context_batch, data_batch):
         num_tasks = len(context_batch)
 
         obs_batch, action_batch, next_obs_batch, reward_batch, done_batch = data_batch
@@ -180,10 +180,15 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             "loss/v": v_loss.item(),
             "loss/policy": policy_loss.item(), 
             kl_subject: kl_loss.item(), 
-            "stats/train_z_mean": -1, #todo
-            "stats/train_z_std": -1 #todo
+            **{
+                f"stats/train_z_mean/{train_task_indices[i]}":torch.norm(z_means[i]).item() 
+                    for i in range(len(train_task_indices))
+            }, 
+            **{
+                f"stats/train_z_var/{train_task_indices[i]}":torch.norm(z_means[i]).item()
+                    for i in range(len(train_task_indices))
+            }
         }
-        
 
 
     def infer_z_posterior(self, context_batch):
@@ -209,7 +214,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             z = [d.rsample() for d in posteriors]
             z = torch.stack(z)
         else:
-            z = self.z_means
+            z = z_means
         z = z.to(util.device)
         return z
 
