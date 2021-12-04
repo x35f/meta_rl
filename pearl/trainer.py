@@ -85,7 +85,7 @@ class PEARLTrainer(BaseTrainer):
             if ite == 0: # collect initial pool of data
                 for idx in range(self.num_train_tasks):
                     self.train_env.reset_task(idx)
-                    initial_samples = self.collect_data(idx, self.train_env, self.start_timestep, 1, np.inf)
+                    initial_samples = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, reample_z_rate=1, update_posterior_rate=np.inf)
                     self.train_encoder_buffers[idx].add_traj(*initial_samples)
                     self.train_replay_buffers[idx].add_traj(*initial_samples)
                     self.tot_env_steps += len(initial_samples[0])
@@ -96,17 +96,18 @@ class PEARLTrainer(BaseTrainer):
                 self.train_env.reset_task(train_task_idx)
                 self.train_encoder_buffers[train_task_idx].clear()
                 prior_samples, posterior_samples, extra_posterior_samples = [[]], [[]], [[]]
+
                 # collect some trajectories with z ~ prior
                 if self.num_steps_prior > 0:
                     self.agent.clear_z()
-                    prior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, 1, np.inf)
+                    prior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf)
                     self.train_encoder_buffers[train_task_idx].add_traj(*prior_samples)
                     self.train_replay_buffers[train_task_idx].add_traj(*prior_samples)
 
                 # collect some trajectories with z ~ posterior
                 if self.num_steps_posterior > 0:
                     self.agent.clear_z()
-                    posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_steps_posterior, 1, self.adaptation_context_update_interval)
+                    posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval)
                     self.train_encoder_buffers[train_task_idx].add_traj(*posterior_samples)
                     self.train_replay_buffers[train_task_idx].add_traj(*posterior_samples)
 
@@ -213,14 +214,14 @@ class PEARLTrainer(BaseTrainer):
         return {"return/test": test_traj_mean_return
         }
 
-    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, z=None, sample_train_buffers=True):
+    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, z_info=None, train=True):
         num_samples_collected = 0
         num_trajectories_collected = 0
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
-        if z is None:
+        if z_info is None:
             z_means, z_vars = torch.zeros((1, self.agent.latent_dim)), torch.ones((1, self.agent.latent_dim))
         else:
-            z_means, z_vars = z
+            z_means, z_vars = z_info
         z_sample = self.agent.sample_z_from_posterior(z_means, z_vars)
         self.agent.set_z(z_sample)
         while num_samples_collected < num_samples:
@@ -257,7 +258,13 @@ class PEARLTrainer(BaseTrainer):
             reward_list.append(reward)
             done_list.append(done)
             traj_length += 1
-        return obs_list, action_list, next_obs_list, reward_list, done_list
+        return {
+            'obs_list': obs_list, 
+            'action_list': action_list, 
+            'next_obs_list': next_obs_list, 
+            'reward_list': reward_list, 
+            'done_list': done_list
+        }
         
 
     def save_video_demo(self, ite, width=128, height=128, fps=30):
