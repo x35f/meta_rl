@@ -13,12 +13,6 @@ from unstable_baselines.common import util
 from unstable_baselines.common.networks import PolicyNetwork, get_act_cls, get_network
 
 
-# # TODO
-# BasePolicy
-# |---DeterministicPolicy
-# |
-# |---StochasticPolicya
-
 class BasePolicyNetwork(ABC, nn.Module):
     def __init__(self, 
                  input_dim: int, 
@@ -52,7 +46,7 @@ class BasePolicyNetwork(ABC, nn.Module):
         elif isinstance(action_space, Box):
             self.action_dim = action_space.shape[0]
         elif isinstance(action_space, MultiBinary):
-            self.aaction_dim = action_space.shape[0]
+            self.action_dim = action_space.shape[0]
         else:
             raise TypeError        
 
@@ -274,12 +268,3 @@ class GaussianPolicyNetwork(BasePolicyNetwork):
         self.action_bias = self.action_bias.to(device)
         super(GaussianPolicyNetwork, self).to(device)
 
-
-
-
-
-
-
-            
-        
-        
