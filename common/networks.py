@@ -1,16 +1,78 @@
 import torch
-from torch._C import device
 import torch.nn as nn
 from torch.distributions import Categorical, Normal
-import numpy as np
-import gym
-from gym.spaces import Discrete, Box, MultiBinary
-from typing import List, Tuple, Any, Sequence, Union, final
-from abc import ABC, abstractmethod
 
-from torch.nn.modules.activation import Tanh
+import gym
+import numpy as np
+from abc import ABC, abstractmethod
+from typing import List, Tuple, Any, Sequence, Union, final
+
+from gym.spaces import Discrete, Box, MultiBinary, space
 from unstable_baselines.common import util
-from unstable_baselines.common.networks import PolicyNetwork, get_act_cls, get_network
+
+
+def get_optimizer(optimizer_class: str, network: nn.Module, learning_rate: float, **kwargs):
+    """
+    Parameters
+    ----------
+    optimizer_class: ['adam', 'sgd'], optional
+        The optimizer class.
+
+    network: torch.nn.Module
+        The network selected to optimize.
+
+    learning_rate: float
+
+    Return
+    ------
+    """
+
+    optimizer_fn = optimizer_class.lower()
+    if optimizer_fn == "adam":
+        optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate)
+    elif optimizer_fn == "sgd":
+        optimizer = torch.optim.SGD(network.parameters(), lr = learning_rate)
+    else:
+        raise NotImplementedError(f"Unimplemented optimizer {optimizer_class}.")
+    return optimizer
+
+def get_network(param_shape, deconv = False):
+    """
+    Parameters
+    ----------
+    param_shape: tuple, length:[(4, ), (2, )], optional
+
+    deconv: boolean
+        Only work when len(param_shape) == 4. 
+    """
+    
+    if len(param_shape) == 4:
+        if deconv:
+            in_channel, kernel_size, stride, out_channel = param_shape
+            return torch.nn.ConvTranspose2d(in_channel, out_channel, kernel_size=kernel_size, stride=stride)
+        else:
+            in_channel, kernel_size, stride, out_channel = param_shape
+            return torch.nn.Conv2d(in_channel, out_channel, kernel_size=kernel_size, stride=stride)
+    elif len(param_shape) == 2:
+        in_dim, out_dim = param_shape
+        return torch.nn.Linear(in_dim, out_dim)
+    else:
+        raise ValueError(f"Network shape {param_shape} illegal.")
+
+def get_act_cls(act_fn_name):
+    act_fn_name = act_fn_name.lower()
+    if act_fn_name == "tanh":
+        act_cls = torch.nn.Tanh
+    elif act_fn_name == "sigmoid":
+        act_cls = torch.nn.Sigmoid
+    elif act_fn_name == 'relu':
+        act_cls = torch.nn.ReLU
+    elif act_fn_name == 'identity':
+        act_cls = torch.nn.Identity
+    else:
+        raise NotImplementedError(f"Activation functtion {act_fn_name} is not implemented. \
+            Possible choice: ['tanh', 'sigmoid', 'relu', 'identity'].")
+    return act_cls
 
 
 class BasePolicyNetwork(ABC, nn.Module):
@@ -268,3 +330,36 @@ class GaussianPolicyNetwork(BasePolicyNetwork):
         self.action_bias = self.action_bias.to(device)
         super(GaussianPolicyNetwork, self).to(device)
 
+
+class PolicyNetworkFactory():
+    # 为了兼容老版本的代码API所实现的工厂方法，和一般的工厂方法实现不同的地方在于 直接使用init函数劫持返回的self。
+
+    def __init__(self, 
+                 input_dim: int, 
+                 action_space: gym.Space, 
+                 hidden_dims: Union[Sequence[int], int], 
+                 act_fn: str = "relu", 
+                 out_act_fn: str = "identity", 
+                 deterministic: bool = False, 
+                 re_parameterize: bool = True, 
+                 distribution_type: str = None,
+                 *args, **kwargs
+        ):
+        # 工厂方法，为了兼容老版本的代码
+        cls = None
+        if deterministic:
+            cls = DeterministicPolicyNetwork
+        elif not distribution_type is None:
+            cls = {
+                "deterministic": DeterministicPolicyNetwork, 
+                "gaussian": GaussianPolicyNetwork, 
+                "categorical": CategoricalPolicyNetwork
+            } .get(distribution_type)
+        elif isinstance(action_space, Discrete):
+            cls = CategoricalPolicyNetwork
+        elif isinstance(action_space, Box):
+            cls = GaussianPolicyNetwork
+        else:
+            raise ArithmeticError(f"Cannot determine policy network type from arguments - deterministic: {deterministic}, distribution_type: {distribution_type}, action_space: {action_space}.")
+        
+        return cls(input_dim, action_space, hidden_dims, act_fn, out_act_fn, re_parameterize, *args, **kwargs)
