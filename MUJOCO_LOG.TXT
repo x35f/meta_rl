@@ -1,0 +1,12 @@
+Tue Nov 30 23:38:28 2021
+ERROR: Shadow framebuffer is not complete, error 0x8cd7
+
+Tue Nov 30 23:40:15 2021
+ERROR: Shadow framebuffer is not complete, error 0x8cd7
+
+Tue Nov 30 23:41:36 2021
+ERROR: Shadow framebuffer is not complete, error 0x8cd7
+
+Mon Dec  6 20:57:09 2021
+ERROR: GLEW initalization error: Missing GL version
+
