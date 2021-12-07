@@ -9,7 +9,7 @@ from unstable_baselines.meta_rl.pearl.trainer import PEARLTrainer
 from unstable_baselines.meta_rl.pearl.agent import PEARLAgent
 from unstable_baselines.common.util import set_device_and_logger, load_config, set_global_seed
 from unstable_baselines.common.buffer import ReplayBuffer
-from unstable_baselines.common.env_wrapper import get_env, BaseEnvWrapper
+from unstable_baselines.common.env_wrapper import get_env, BaseEnvWrapper, NormalizedBoxEnv
 
 
 @click.command(context_settings=dict(
@@ -46,10 +46,10 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     logger.log_str("Initializing Environment")
     num_train_tasks = args['common']['num_train_tasks']
     num_test_tasks = args['common']['num_test_tasks']
-    train_env = get_env(env_name, n_tasks=num_train_tasks)
-    train_env = BaseEnvWrapper(train_env, **args['env'])
-    test_env = get_env(env_name, n_tasks=num_test_tasks)
-    test_env = BaseEnvWrapper(test_env, **args['env'])
+    train_env = get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True)
+    train_env = NormalizedBoxEnv(train_env)
+    test_env = get_env(env_name, n_tasks=num_test_tasks, randomize_tasks=True)
+    test_env = NormalizedBoxEnv(test_env)
     state_space = train_env.observation_space
     action_space = train_env.action_space
 

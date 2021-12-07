@@ -71,7 +71,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.q2_optimizer = get_optimizer(kwargs['q_network']['optimizer_class'], self.q2_network, kwargs['q_network']['learning_rate'])
         self.v_optimizer = get_optimizer(kwargs['v_network']['optimizer_class'], self.v_network, kwargs['v_network']['learning_rate'])
         self.policy_optimizer = get_optimizer(kwargs['policy_network']['optimizer_class'], self.policy_network, kwargs['policy_network']['learning_rate'])
-        self.context_encoder_optimizer = get_optimizer(kwargs['context_encoder_network']['optimizer_class'], self.policy_network, kwargs['context_encoder_network']['learning_rate'])
+        self.context_encoder_optimizer = get_optimizer(kwargs['context_encoder_network']['optimizer_class'], self.context_encoder_network, kwargs['context_encoder_network']['learning_rate'])
 
         #hyper-parameters
         self.gamma = kwargs['gamma']
@@ -86,7 +86,6 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.target_smoothing_tau = target_smoothing_tau
 
     def update(self, train_task_indices, context_batch, data_batch):
-        num_tasks = len(context_batch)
         
         obs_batch, action_batch, reward_batch, next_obs_batch, done_batch = data_batch
         
@@ -105,7 +104,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         done_batch = done_batch.view(num_tasks * batch_size, -1)
         
         #expand z to match obs batch
-        task_z_batch = [task_z.repeat(batch_size, 1 ) for task_z in task_z_batch]
+        task_z_batch = [task_z.repeat(batch_size, 1) for task_z in task_z_batch]
         task_z_batch = torch.cat(task_z_batch, dim=0)
         # get new policy output
         policy_input = torch.cat([obs_batch, task_z_batch.detach()], dim=1)
@@ -145,13 +144,12 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         v_loss = torch.mean((new_target_v_value.detach() - curr_state_v_value) **2)
 
         #compute loss w.r.t policy function
-        target_prob_loss = torch.mean(new_action_log_probs - new_min_q)
+        target_prob_loss = torch.mean(new_action_log_probs - new_min_q.detach())
         
         mean_reg_loss = torch.mean(self.policy_mean_reg_weight * (new_action_means ** 2))
         std_reg_loss = torch.mean(self.policy_std_reg_weight * (new_action_log_stds ** 2))
         pre_activation_reg_loss = self.policy_pre_activation_weight * ((pre_tanh_value ** 2).sum(dim=1).mean())
         policy_loss = target_prob_loss + mean_reg_loss + std_reg_loss + pre_activation_reg_loss
-        #policy_loss = pre_activation_reg_loss
 
         #backward losses, then update networks
         self.context_encoder_optimizer.zero_grad()
@@ -165,6 +163,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         q_loss.backward()
         v_loss.backward()
         policy_loss.backward()
+        
         self.v_optimizer.step()
         self.policy_optimizer.step()
         self.context_encoder_optimizer.step()
@@ -221,13 +220,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         else:
             z = z_means
         z = z.to(util.device)
-        return z
-
-    def set_z(self, z):
-        self.z = z    
-        
-    def clear_z(self, num_tasks=1):
-        self.z = torch.zeros((num_tasks, self.latent_dim)).to(util.device)
+        return z 
 
     def try_update_target_network(self):
         if self.tot_update_count % self.update_target_network_interval == 0:
