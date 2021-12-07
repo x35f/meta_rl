@@ -7,8 +7,11 @@
   "trainer":{
     "max_iteration": 50000,
     "num_train_tasks_to_sample_per_iteration": 2, 
-    "num_tasks_per_gradient_update": 2,
-    "num_updates_per_iteration":500
+    "num_tasks_per_gradient_update": 4,
+    "num_steps_prior": 1000, 
+    "num_steps_posterior": 0, 
+    "num_extra_rl_steps_posterior": 1000,
+    "z_inference_batch_size": 256
   },
   "agent":{
     "batch_size": 256,
