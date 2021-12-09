@@ -170,6 +170,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.q1_optimizer.step()
         self.q2_optimizer.step()
 
+        self.update_target_network_interval += 1
         #update target v network
         self.try_update_target_network()
         

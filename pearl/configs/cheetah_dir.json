@@ -5,7 +5,7 @@
     "num_test_tasks": 2
   },
   "trainer":{
-    "max_iteration": 50000,
+    "max_iteration": 500,
     "num_train_tasks_to_sample_per_iteration": 2, 
     "num_tasks_per_gradient_update": 4,
     "num_steps_prior": 1000, 
