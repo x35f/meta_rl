@@ -17,8 +17,8 @@ class PEARLTrainer(BaseTrainer):
             max_iteration=500,
             num_tasks_per_gradient_update=16,
             num_train_tasks=50,
-            num_test_tasks=10,
-            num_train_tasks_per_iteration=5, 
+            num_test_tasks=2,
+            num_train_tasks_to_sample_per_iteration=5, 
             num_steps_prior=400, 
             num_steps_posterior=0, 
             num_extra_rl_steps_posterior=400,
@@ -51,7 +51,7 @@ class PEARLTrainer(BaseTrainer):
         self.num_test_tasks = num_test_tasks
         self.max_iteration = max_iteration
         self.num_tasks_per_gradient_update = num_tasks_per_gradient_update
-        self.num_train_tasks_per_iteration = num_train_tasks_per_iteration
+        self.num_train_tasks_to_sample_per_iteration = num_train_tasks_to_sample_per_iteration
         self.num_steps_prior = num_steps_prior
         self.num_steps_posterior = num_steps_posterior
         self.num_extra_rl_steps_posterior = num_extra_rl_steps_posterior
@@ -62,7 +62,6 @@ class PEARLTrainer(BaseTrainer):
         self.num_steps_per_iteration = num_steps_per_iteration
         self.max_trajectory_length = max_trajectory_length
         self.test_interval = test_interval
-        self.num_test_tasks = num_test_tasks
         self.num_test_trajectories = num_test_trajectories
         self.save_model_interval = save_model_interval
         self.start_timestep = start_timestep
@@ -85,44 +84,48 @@ class PEARLTrainer(BaseTrainer):
             if ite == 0: # collect initial pool of data
                 for idx in range(self.num_train_tasks):
                     self.train_env.reset_task(idx)
-                    initial_samples = self.collect_data(idx, self.train_env, self.start_timestep, 1, np.inf)
-                    self.train_encoder_buffers[idx].add_traj(*initial_samples)
-                    self.train_replay_buffers[idx].add_traj(*initial_samples)
-                    self.tot_env_steps += len(initial_samples[0])
+                    intial_z = {
+                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
+                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
+                        }
+                    initial_samples = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=intial_z)
+                    self.train_encoder_buffers[idx].add_traj(**initial_samples)
+                    self.train_replay_buffers[idx].add_traj(**initial_samples)
+                    self.tot_env_steps += len(initial_samples['obs_list'])
 
             #sample data from train_tasks
-            train_task_indices = random.sample(range(self.num_train_tasks), self.num_train_tasks_per_iteration)
-            for train_task_idx in train_task_indices:
+            for idx in range(self.num_train_tasks_to_sample_per_iteration):
+                train_task_idx = random.choice(range(self.num_train_tasks)) # the same sampling method as the source code
                 self.train_env.reset_task(train_task_idx)
                 self.train_encoder_buffers[train_task_idx].clear()
-                prior_samples, posterior_samples, extra_posterior_samples = [[]], [[]], [[]]
+                prior_samples, posterior_samples, extra_posterior_samples = {"obs_list":[]} ,{"obs_list":[]}, {"obs_list":[]}
+
                 # collect some trajectories with z ~ prior
                 if self.num_steps_prior > 0:
-                    self.agent.clear_z()
-                    prior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, 1, np.inf)
-                    self.train_encoder_buffers[train_task_idx].add_traj(*prior_samples)
-                    self.train_replay_buffers[train_task_idx].add_traj(*prior_samples)
+                    prior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True)
+                    self.train_encoder_buffers[train_task_idx].add_traj(**prior_samples)
+                    self.train_replay_buffers[train_task_idx].add_traj(**prior_samples)
 
                 # collect some trajectories with z ~ posterior
                 if self.num_steps_posterior > 0:
-                    self.agent.clear_z()
-                    posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_steps_posterior, 1, self.adaptation_context_update_interval)
-                    self.train_encoder_buffers[train_task_idx].add_traj(*posterior_samples)
-                    self.train_replay_buffers[train_task_idx].add_traj(*posterior_samples)
+                    posterior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
+                    self.train_encoder_buffers[train_task_idx].add_traj(**posterior_samples)
+                    self.train_replay_buffers[train_task_idx].add_traj(**posterior_samples)
 
                 # trajectories from the policy handling z ~ posterior
                 if self.num_extra_rl_steps_posterior > 0:
-                    self.agent.clear_z()
-                    extra_posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_extra_rl_steps_posterior, 1, self.adaptation_context_update_interval)
-                    self.train_replay_buffers[train_task_idx].add_traj(*extra_posterior_samples)
+                    extra_posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_extra_rl_steps_posterior,resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
+                    self.train_replay_buffers[train_task_idx].add_traj(**extra_posterior_samples)
                     #does not add to encoder buffer since it's extra posterior
-
-                self.tot_env_steps += len(prior_samples[0]) + len(posterior_samples[0]) + len(extra_posterior_samples[0])
-                train_task_returns.append(np.sum(extra_posterior_samples[3]))
+                
+                self.tot_env_steps += len(prior_samples['obs_list']) + len(posterior_samples['obs_list']) + len(extra_posterior_samples['obs_list'])
+                train_task_returns.append(np.mean(self.calculate_data_return(extra_posterior_samples)))
+            
             #perform training on batches of train tasks
             for train_step in range(self.num_updates_per_iteration):
                 train_task_indices = np.random.choice(range(self.num_train_tasks), self.num_tasks_per_gradient_update)
                 loss_dict = self.train_step(train_task_indices)
+
             train_traj_rewards.append(np.mean(train_task_returns))
             #post iteration logging
             iteration_end_time = time()
@@ -149,47 +152,60 @@ class PEARLTrainer(BaseTrainer):
 
     def train_step(self, train_task_indices):
         # sample train context
-        context_batch = self.sample_context(train_task_indices, train=True)
+        context_batch = self.sample_context(train_task_indices, is_training=True)
         
         #sample data for sac update
-        data_batch = [self.train_replay_buffers[index].sample_batch(batch_size=self.batch_size, to_tensor=False) for index in train_task_indices]
-        #data_batch is of shape task_num, [obs, action, next_obs, rewards, done]
+        data_batch = [self.train_replay_buffers[index].sample_batch(batch_size=self.batch_size) for index in train_task_indices]
+        data_batch = [self.unpack_context_batch(data) for data in data_batch]
         data_batch = [[x[i] for x in data_batch] for i in range(len(data_batch[0]))]
-        #data_batch is of shape [task_num, obs_dim], [task_num, action_dim], ...
-        data_batch = [torch.FloatTensor(d).to(util.device) for d in data_batch]
-
-        #clear z inference
-        self.agent.clear_z(num_tasks=len(train_task_indices))
+        data_batch = [torch.cat(x, dim=0) for x in data_batch]
+        # obs, actions, next_obs, reward, done
         
         #perform update on context and data, and also passes task indices for log
         loss_dict = self.agent.update(train_task_indices, context_batch, data_batch)
         
         return loss_dict
 
-    def sample_context(self, indices, train=True):
-        if train:
-            contexts = [list(self.train_replay_buffers[idx].sample_batch(self.z_inference_batch_size, to_tensor=False)) for idx in indices]
-        else:
-            contexts = [list(self.test_buffer.sample_batch(self.z_inference_batch_size, to_tensor=False)) for idx in indices]
-        # task_num,  [states, actions, next_states, rewards, dones] of length batch_size
-        # unsqueeze rewards for concatenation
-        for i, task_context in enumerate(contexts):
-            contexts[i][3] = np.expand_dims(contexts[i][3], axis=1)
 
+
+    def sample_context(self, indices, is_training):
+        if is_training:
+            contexts = [self.train_replay_buffers[idx].sample_batch(self.z_inference_batch_size) for idx in indices]
+            # task_num,  [states, actions, next_states, rewards, dones] of length batch_size
+        else:
+            contexts = [self.test_buffer.sample_batch(self.z_inference_batch_size)]
+        contexts = [self.unpack_context_batch(context_batch) for context_batch in contexts]
+        contexts = [[x[i] for x in contexts] for i in range(len(contexts[0]))]
+        contexts = [torch.cat(x, dim=0) for x in contexts]
         if self.use_next_obs_in_context:
-            contexts = [task_context[:2] +  [task_context[2], task_context[3]]  for task_context in contexts]
+            contexts = torch.cat(contexts[:-1], dim=2)
         else:
-            contexts = [task_context[:2] +  [task_context[3]] for task_context in contexts]
-        # task_num,  [states, actions, rewards, (next_states)] of length batch_size
-        contexts = [torch.cat([torch.FloatTensor(batch_context)for batch_context in task_context], dim=1) for task_context in contexts]
-        contexts = torch.stack(contexts).to(util.device)
-        #task_num, batch_size, context_dim
+            contexts = torch.cat(contexts[:-2], dim=2)
         return contexts
+    
+    def unpack_context_batch(self, data):
+        ''' unpack a batch and return individual elements '''
+        o = data['obs'][None, ...]
+        a = data['action'][None, ...]
+        r = data['reward'][None, ...]
+        no = data['next_obs'][None, ...]
+        d = data['done'][None, ...]
+        return [o, a, r, no, d]
 
+    def calculate_data_return(self, data):
+        reward_list = data['reward_list']
+        done_list = data['done_list']
+        return_list = []
+        curr_traj_return = 0
+        for r,d in zip(reward_list, done_list):
+            curr_traj_return += r
+            if d:
+                return_list.append(curr_traj_return)
+                curr_traj_return = 0
+        return return_list
+                
     def test(self):
         test_traj_returns = []
-        
-        self.agent.clear_z(num_tasks=1)
         for idx in range(self.num_test_tasks):
             #reset env and buffer
             self.test_env.reset_task(idx)
@@ -198,14 +214,14 @@ class PEARLTrainer(BaseTrainer):
             initial_samples = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
             #todo: there is a z gap between these sampling processes
             extra_samples = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
-            self.test_buffer.add_traj(*initial_samples)
-            self.test_buffer.add_traj(*extra_samples)
-            context = self.sample_context([idx], train=False) 
+            self.test_buffer.add_traj(**initial_samples)
+            self.test_buffer.add_traj(**extra_samples)
+            context = self.sample_context(None, is_training=False) 
             z_means, z_vars = self.agent.infer_z_posterior(context)
             z = self.agent.sample_z_from_posterior(z_means, z_vars)
             for traj_idx in range(self.num_test_trajectories):
                 test_data = self.rollout_trajectory(self.test_env, z, deterministic=True)
-                reward_list = test_data[3]
+                reward_list = test_data['reward_list']
                 traj_return = np.sum(reward_list)
                 traj_returns.append(traj_return)
             test_traj_returns.append(np.mean(traj_returns))
@@ -213,35 +229,42 @@ class PEARLTrainer(BaseTrainer):
         return {"return/test": test_traj_mean_return
         }
 
-    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, z=None, sample_train_buffers=True):
+    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, is_training=True, initial_z=None):
         num_samples_collected = 0
         num_trajectories_collected = 0
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
-        if z is None:
-            z_means, z_vars = torch.zeros((1, self.agent.latent_dim)), torch.ones((1, self.agent.latent_dim))
-        else:
-            z_means, z_vars = z
-        z_sample = self.agent.sample_z_from_posterior(z_means, z_vars)
-        self.agent.set_z(z_sample)
-        while num_samples_collected < num_samples:
-            curr_obs_list, curr_action_list, curr_next_obs_list, curr_reward_list, curr_done_list = self.rollout_trajectory(env, z_sample, deterministic=True)
-            obs_list += curr_obs_list
-            action_list += curr_action_list
-            next_obs_list += curr_next_obs_list
-            reward_list += curr_reward_list
-            done_list += curr_done_list
-            num_samples_collected += len(curr_obs_list)
+        if initial_z is None:
+            z_inference_context_batch = self.sample_context([task_idx], is_training=is_training)
+            z_mean, z_var = self.agent.infer_z_posterior(z_inference_context_batch)
+            z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
+        else: # for initialization when no context is available in the buffer
+            z_mean = initial_z['z_mean']
+            z_var = initial_z['z_var']
+            z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
+
+        while num_samples_collected < num_samples: 
+            curr_traj_samples = self.rollout_trajectory(env, z_sample, deterministic=True)
+            obs_list += curr_traj_samples['obs_list']
+            action_list += curr_traj_samples['action_list'] 
+            next_obs_list += curr_traj_samples['next_obs_list']
+            reward_list += curr_traj_samples['reward_list']
+            done_list += curr_traj_samples['done_list']
+            num_samples_collected += len(curr_traj_samples['obs_list'])
             num_trajectories_collected += 1
             if num_trajectories_collected % resample_z_rate == 0:
-                z_sample = self.agent.sample_z_from_posterior(z_means, z_vars)
-                self.agent.set_z(z_sample)
+                z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
             if num_trajectories_collected % update_posterior_rate == 0:
                 #update z posterior inference
-                z_inference_context_batch = self.sample_context([task_idx], train=True)
-                z_means, z_vars = self.agent.infer_z_posterior(z_inference_context_batch)
-                z_sample = self.agent.sample_z_from_posterior(z_means, z_vars)
-                self.agent.set_z(z_sample)
-        return obs_list, action_list, next_obs_list, reward_list, done_list
+                z_inference_context_batch = self.sample_context([task_idx], is_training=is_training)
+                z_mean, z_var = self.agent.infer_z_posterior(z_inference_context_batch)
+                z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
+        return {
+            'obs_list': obs_list, 
+            'action_list': action_list, 
+            'next_obs_list': next_obs_list, 
+            'reward_list': reward_list,
+            'done_list': done_list
+        }
 
     def rollout_trajectory(self, env, z, deterministic=False):
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
@@ -251,13 +274,21 @@ class PEARLTrainer(BaseTrainer):
         while not done and traj_length < self.max_trajectory_length:
             action, log_prob = self.agent.select_action(obs, z, deterministic=deterministic)
             next_obs, reward, done, info = env.step(action)
+            if traj_length == self.max_trajectory_length - 1:
+                done = True
             obs_list.append(obs)
             action_list.append(action)
             next_obs_list.append(next_obs)
             reward_list.append(reward)
             done_list.append(done)
             traj_length += 1
-        return obs_list, action_list, next_obs_list, reward_list, done_list
+        return {
+            'obs_list': obs_list, 
+            'action_list': action_list, 
+            'next_obs_list': next_obs_list, 
+            'reward_list': reward_list, 
+            'done_list': done_list
+        }
         
 
     def save_video_demo(self, ite, width=128, height=128, fps=30):
@@ -274,11 +305,11 @@ class PEARLTrainer(BaseTrainer):
             initial_samples = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
             #todo: there is a z gap between these sampling processes
             extra_samples = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
-            self.test_buffer.add_traj(*initial_samples)
-            self.test_buffer.add_traj(*extra_samples)
-            context = self.sample_context([1], train=False) 
-            z_means, z_vars = self.agent.infer_z_posterior(context)
-            z = self.agent.sample_z_from_posterior(z_means, z_vars)
+            self.test_buffer.add_traj(**initial_samples)
+            self.test_buffer.add_traj(**extra_samples)
+            context = self.sample_context(None, is_training=False) 
+            z_mean, z_var = self.agent.infer_z_posterior(context)
+            z = self.agent.sample_z_from_posterior(z_mean, z_var)
             video_save_path = os.path.join(ite_video_demo_dir, "task_{}.avi".format(idx))
 
             #initilialize video writer
