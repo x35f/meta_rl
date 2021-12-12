@@ -12,7 +12,7 @@
     "max_buffer_size": 100000
   },
   "encoder_buffer":{
-    "max_buffer_size": 10000
+    "max_buffer_size": 100000
   },
   "agent":{
     "gamma": 0.99,

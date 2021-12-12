@@ -88,7 +88,7 @@ class PEARLTrainer(BaseTrainer):
                         'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
                         'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
                         }
-                    initial_samples = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=intial_z)
+                    initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=intial_z)
                     self.train_encoder_buffers[idx].add_traj(**initial_samples)
                     self.train_replay_buffers[idx].add_traj(**initial_samples)
                     self.tot_env_steps += len(initial_samples['obs_list'])
@@ -102,24 +102,24 @@ class PEARLTrainer(BaseTrainer):
 
                 # collect some trajectories with z ~ prior
                 if self.num_steps_prior > 0:
-                    prior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True)
+                    prior_samples, _ = self.collect_data(train_task_idx, self.train_env, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True)
                     self.train_encoder_buffers[train_task_idx].add_traj(**prior_samples)
                     self.train_replay_buffers[train_task_idx].add_traj(**prior_samples)
 
                 # collect some trajectories with z ~ posterior
                 if self.num_steps_posterior > 0:
-                    posterior_samples = self.collect_data(train_task_idx, self.train_env, self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
+                    posterior_samples, _ = self.collect_data(train_task_idx, self.train_env, self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
                     self.train_encoder_buffers[train_task_idx].add_traj(**posterior_samples)
                     self.train_replay_buffers[train_task_idx].add_traj(**posterior_samples)
 
                 # trajectories from the policy handling z ~ posterior
                 if self.num_extra_rl_steps_posterior > 0:
-                    extra_posterior_samples = self.collect_data(train_task_idx, self.train_env,self.num_extra_rl_steps_posterior,resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
+                    extra_posterior_samples, extra_posterior_returns = self.collect_data(train_task_idx, self.train_env,self.num_extra_rl_steps_posterior,resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True)
                     self.train_replay_buffers[train_task_idx].add_traj(**extra_posterior_samples)
                     #does not add to encoder buffer since it's extra posterior
                 
                 self.tot_env_steps += len(prior_samples['obs_list']) + len(posterior_samples['obs_list']) + len(extra_posterior_samples['obs_list'])
-                train_task_returns.append(np.mean(self.calculate_data_return(extra_posterior_samples)))
+                train_task_returns.append(np.mean(extra_posterior_returns))
             
             #perform training on batches of train tasks
             for train_step in range(self.num_updates_per_iteration):
@@ -135,6 +135,7 @@ class PEARLTrainer(BaseTrainer):
                 self.logger.log_var('return/train', train_traj_rewards[-1], self.tot_env_steps)
                 for loss_name in loss_dict:
                     self.logger.log_var(loss_name, loss_dict[loss_name], self.tot_env_steps)
+                self.logger.log_var("time/train_iteration_duration", iteration_duration, self.tot_env_steps)
             if ite % self.test_interval == 0:
                 log_dict = self.test()
                 avg_test_reward = log_dict['return/test']
@@ -144,9 +145,8 @@ class PEARLTrainer(BaseTrainer):
                 time_remaining_str = second_to_time_str(remaining_seconds)
                 summary_str = "iteration {}/{}:\ttrain return {:.02f}\ttest return {:02f}\teta: {}".format(ite, self.max_iteration, train_traj_rewards[-1],avg_test_reward,time_remaining_str)
                 self.logger.log_str(summary_str)
-                self.logger.log_var("time/train_iteration_duration", iteration_duration, self.tot_env_steps)
             if ite % self.save_model_interval == 0:
-                self.agent.save_model(self.logger.log_dir, self.tot_env_steps)
+                self.agent.save_model(self.tot_env_steps)
             if ite % self.save_video_demo_interval == 0:
                 self.save_video_demo(self.tot_env_steps)
 
@@ -165,8 +165,6 @@ class PEARLTrainer(BaseTrainer):
         loss_dict = self.agent.update(train_task_indices, context_batch, data_batch)
         
         return loss_dict
-
-
 
     def sample_context(self, indices, is_training):
         if is_training:
@@ -211,9 +209,9 @@ class PEARLTrainer(BaseTrainer):
             self.test_env.reset_task(idx)
             self.test_buffer.clear()
             traj_returns =[]
-            initial_samples = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
+            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
             #todo: there is a z gap between these sampling processes
-            extra_samples = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
+            extra_samples, _ = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
             self.test_buffer.add_traj(**initial_samples)
             self.test_buffer.add_traj(**extra_samples)
             context = self.sample_context(None, is_training=False) 
@@ -221,8 +219,7 @@ class PEARLTrainer(BaseTrainer):
             z = self.agent.sample_z_from_posterior(z_means, z_vars)
             for traj_idx in range(self.num_test_trajectories):
                 test_data = self.rollout_trajectory(self.test_env, z, deterministic=True)
-                reward_list = test_data['reward_list']
-                traj_return = np.sum(reward_list)
+                traj_return = test_data['return']
                 traj_returns.append(traj_return)
             test_traj_returns.append(np.mean(traj_returns))
         test_traj_mean_return = np.mean(test_traj_returns)
@@ -241,7 +238,7 @@ class PEARLTrainer(BaseTrainer):
             z_mean = initial_z['z_mean']
             z_var = initial_z['z_var']
             z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
-
+        traj_returns = []
         while num_samples_collected < num_samples: 
             curr_traj_samples = self.rollout_trajectory(env, z_sample, deterministic=True)
             obs_list += curr_traj_samples['obs_list']
@@ -250,6 +247,7 @@ class PEARLTrainer(BaseTrainer):
             reward_list += curr_traj_samples['reward_list']
             done_list += curr_traj_samples['done_list']
             num_samples_collected += len(curr_traj_samples['obs_list'])
+            traj_returns.append(curr_traj_samples['return'])
             num_trajectories_collected += 1
             if num_trajectories_collected % resample_z_rate == 0:
                 z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
@@ -263,19 +261,19 @@ class PEARLTrainer(BaseTrainer):
             'action_list': action_list, 
             'next_obs_list': next_obs_list, 
             'reward_list': reward_list,
-            'done_list': done_list
-        }
+            'done_list': done_list,
+        }, traj_returns
 
     def rollout_trajectory(self, env, z, deterministic=False):
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
         done = False
         obs = env.reset()
         traj_length = 0
+        traj_return = 0
         while not done and traj_length < self.max_trajectory_length:
             action, log_prob = self.agent.select_action(obs, z, deterministic=deterministic)
             next_obs, reward, done, info = env.step(action)
-            if traj_length == self.max_trajectory_length - 1:
-                done = True
+            traj_return += reward
             obs_list.append(obs)
             action_list.append(action)
             next_obs_list.append(next_obs)
@@ -287,7 +285,8 @@ class PEARLTrainer(BaseTrainer):
             'action_list': action_list, 
             'next_obs_list': next_obs_list, 
             'reward_list': reward_list, 
-            'done_list': done_list
+            'done_list': done_list,
+            'return': traj_return
         }
         
 
@@ -302,9 +301,9 @@ class PEARLTrainer(BaseTrainer):
             #reset env and buffer
             self.test_env.reset_task(idx)
             self.test_buffer.clear()
-            initial_samples = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
+            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
             #todo: there is a z gap between these sampling processes
-            extra_samples = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
+            extra_samples, _ = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
             self.test_buffer.add_traj(**initial_samples)
             self.test_buffer.add_traj(**extra_samples)
             context = self.sample_context(None, is_training=False) 

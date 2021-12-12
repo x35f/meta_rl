@@ -4,7 +4,7 @@ import gym
 import os
 from torch import nn
 from unstable_baselines.common.agents import BaseAgent
-from unstable_baselines.common.networks import MLPNetwork, PolicyNetwork, get_optimizer
+from .common.networks import MLPNetwork, GaussianPolicyNetwork, get_optimizer
 from unstable_baselines.common.buffer import ReplayBuffer
 import numpy as np
 from unstable_baselines.common import util 
@@ -33,7 +33,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.q2_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
         self.v_network = MLPNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
         self.target_v_network = MLPNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
-        self.policy_network = PolicyNetwork(obs_dim + self.latent_dim, action_space,  ** kwargs['policy_network'])
+        self.policy_network = GaussianPolicyNetwork(obs_dim + self.latent_dim, action_space,  ** kwargs['policy_network'])
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
         if self.use_next_obs_in_context:
             context_encoder_input_dim = 2 * obs_dim + action_dim + 1
@@ -106,21 +106,17 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         #expand z to match obs batch
         task_z_batch = [task_z.repeat(batch_size, 1) for task_z in task_z_batch]
         task_z_batch = torch.cat(task_z_batch, dim=0)
-        # get new policy output
-        policy_input = torch.cat([obs_batch, task_z_batch.detach()], dim=1)
-        new_action_samples, new_action_log_probs, new_action_means, extra_infos = self.policy_network.sample(policy_input)
-        new_action_log_stds = extra_infos['action_std']
-        pre_tanh_value = extra_infos['pre_tanh_value']
-
         
-        curr_state_q1_value = self.q1_network(torch.cat([obs_batch, action_batch, task_z_batch], dim=1))
-        curr_state_q2_value = self.q2_network(torch.cat([obs_batch, action_batch, task_z_batch], dim=1))
-        curr_state_v_value = self.v_network(torch.cat([obs_batch, task_z_batch.detach()], dim=1))
+        #compute Q loss and context encoder loss
+        curr_state_q1_value = self.q1_network(torch.cat([obs_batch, action_batch.detach(), task_z_batch], dim=1))
+        curr_state_q2_value = self.q2_network(torch.cat([obs_batch, action_batch.detach(), task_z_batch], dim=1))
         with torch.no_grad():
             target_v_value = self.target_v_network(torch.cat([next_obs_batch, task_z_batch], dim=1))
         target_q_value = reward_batch + (1.0 - done_batch) * self.gamma * target_v_value
-
-        #compute losses
+        #compute q loss
+        q1_loss = F.mse_loss(curr_state_q1_value, target_q_value)
+        q2_loss =  F.mse_loss(curr_state_q2_value, target_q_value)
+        q_loss = q1_loss + q2_loss
 
         #compute kl loss if use information bottleneck for context optimizer
         prior = torch.distributions.Normal(torch.zeros(self.latent_dim, device=util.device), torch.ones(self.latent_dim, device=util.device))
@@ -129,48 +125,51 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         kl_div = torch.sum(torch.stack(kl_divs))
         kl_loss = self.kl_lambda * kl_div
 
-        #compute q loss
-        q1_loss = torch.mean((curr_state_q1_value - target_q_value) ** 2) 
-        q2_loss =  torch.mean((curr_state_q2_value - target_q_value) ** 2)
-        q_loss = q1_loss + q2_loss
-        
-        #conpute encoder loss
-
-        # compute loss w.r.t value function
-        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_action_samples, task_z_batch.detach()], dim=1))
-        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_action_samples, task_z_batch.detach()], dim=1))
-        new_min_q = torch.min(new_curr_state_q1_value, new_curr_state_q2_value)
-        new_target_v_value = new_min_q - new_action_log_probs
-        v_loss = torch.mean((new_target_v_value.detach() - curr_state_v_value) **2)
-
-        #compute loss w.r.t policy function
-        target_prob_loss = torch.mean(new_action_log_probs - new_min_q.detach())
-        
-        mean_reg_loss = torch.mean(self.policy_mean_reg_weight * (new_action_means ** 2))
-        std_reg_loss = torch.mean(self.policy_std_reg_weight * (new_action_log_stds ** 2))
-        pre_activation_reg_loss = self.policy_pre_activation_weight * ((pre_tanh_value ** 2).sum(dim=1).mean())
-        policy_loss = target_prob_loss + mean_reg_loss + std_reg_loss + pre_activation_reg_loss
-
-        #backward losses, then update networks
+        # update context encoder and q network
         self.context_encoder_optimizer.zero_grad()
         self.q1_optimizer.zero_grad()
         self.q2_optimizer.zero_grad()
-        self.policy_optimizer.zero_grad()
-        self.v_optimizer.zero_grad()
-
         if self.use_information_bottleneck:
             kl_loss.backward(retain_graph=True)
         q_loss.backward()
-        v_loss.backward()
-        policy_loss.backward()
-        
-        self.v_optimizer.step()
-        self.policy_optimizer.step()
         self.context_encoder_optimizer.step()
         self.q1_optimizer.step()
         self.q2_optimizer.step()
 
-        self.update_target_network_interval += 1
+
+        # compute loss w.r.t value function
+        policy_input = torch.cat([obs_batch, task_z_batch.detach()], dim=1)
+        new_curr_action_info = self.policy_network.sample(policy_input)
+        new_curr_actions = new_curr_action_info['action_scaled']
+        new_curr_action_log_probs = new_curr_action_info['log_prob']
+        new_curr_action_means = new_curr_action_info['action_raw_mean']
+        new_curr_action_log_stds = new_curr_action_info['action_raw_log_std']
+        new_curr_action_pre_tanh_values = new_curr_action_info['action_prev_tanh']
+
+        curr_state_v_value = self.v_network(torch.cat([obs_batch, task_z_batch.detach()], dim=1))
+        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
+        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
+        new_min_q = torch.min(new_curr_state_q1_value, new_curr_state_q2_value)
+        new_target_v_value = new_min_q - new_curr_action_log_probs
+        v_loss = F.mse_loss(new_target_v_value.detach(), curr_state_v_value)
+        self.v_optimizer.zero_grad()
+        v_loss.backward()
+        self.v_optimizer.step()
+
+
+        #compute loss w.r.t policy function
+        target_prob_loss = torch.mean(new_curr_action_log_probs - new_min_q)
+        
+        mean_reg_loss = torch.mean(self.policy_mean_reg_weight * (new_curr_action_means ** 2))
+        std_reg_loss = torch.mean(self.policy_std_reg_weight * (new_curr_action_log_stds ** 2))
+        pre_activation_reg_loss = self.policy_pre_activation_weight * ((new_curr_action_pre_tanh_values ** 2).sum(dim=1).mean())
+        policy_loss = target_prob_loss + mean_reg_loss + std_reg_loss + pre_activation_reg_loss
+
+        #backward losses, then update networks
+        self.policy_optimizer.zero_grad()
+        policy_loss.backward()
+        self.policy_optimizer.step()
+
         #update target v network
         self.try_update_target_network()
         
@@ -224,8 +223,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         return z 
 
     def try_update_target_network(self):
-        if self.tot_update_count % self.update_target_network_interval == 0:
-            util.soft_update_network(self.v_network, self.target_v_network, self.target_smoothing_tau)
+        util.soft_update_network(self.v_network, self.target_v_network, self.target_smoothing_tau)
             
     def select_action(self, state, z, deterministic=False):
         if type(state) != torch.tensor:
@@ -233,8 +231,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         if len(state.shape) == 1:
             state = state.unsqueeze(0)
         policy_network_input = torch.cat([state, z.detach()], dim=1)
-        action, log_prob, mean, std = self.policy_network.sample(policy_network_input)
-        if deterministic:
-            return mean.detach().cpu().numpy()[0], log_prob
-        else:
-            return action.detach().cpu().numpy()[0], log_prob
+        action_info= self.policy_network.sample(policy_network_input, deterministic=deterministic)
+        action = action_info['action_scaled']
+        log_prob = action_info['log_prob']
+        return action.detach().cpu().numpy()[0], log_prob
