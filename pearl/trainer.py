@@ -84,11 +84,11 @@ class PEARLTrainer(BaseTrainer):
             if ite == 0: # collect initial pool of data
                 for idx in range(self.num_train_tasks):
                     self.train_env.reset_task(idx)
-                    intial_z = {
+                    initial_z = {
                         'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
                         'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
                         }
-                    initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=intial_z)
+                    initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z)
                     self.train_encoder_buffers[idx].add_traj(**initial_samples)
                     self.train_replay_buffers[idx].add_traj(**initial_samples)
                     self.tot_env_steps += len(initial_samples['obs_list'])
@@ -179,6 +179,8 @@ class PEARLTrainer(BaseTrainer):
             contexts = torch.cat(contexts[:-1], dim=2)
         else:
             contexts = torch.cat(contexts[:-2], dim=2)
+        # if not is_training:
+        #     print("contexts:", contexts.shape)
         return contexts
     
     def unpack_context_batch(self, data):
@@ -209,11 +211,16 @@ class PEARLTrainer(BaseTrainer):
             self.test_env.reset_task(idx)
             self.test_buffer.clear()
             traj_returns =[]
-            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
+            initial_z = {
+                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
+                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
+                        }
+            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
             #todo: there is a z gap between these sampling processes
-            extra_samples, _ = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
+            #print("adding initial samples", )
             self.test_buffer.add_traj(**initial_samples)
-            self.test_buffer.add_traj(**extra_samples)
+            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf, is_training=False)
+            self.test_buffer.add_traj(**posterior_samples)
             context = self.sample_context(None, is_training=False) 
             z_means, z_vars = self.agent.infer_z_posterior(context)
             z = self.agent.sample_z_from_posterior(z_means, z_vars)
@@ -226,7 +233,7 @@ class PEARLTrainer(BaseTrainer):
         return {"return/test": test_traj_mean_return
         }
 
-    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, is_training=True, initial_z=None):
+    def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, is_training, initial_z=None):
         num_samples_collected = 0
         num_trajectories_collected = 0
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
@@ -301,11 +308,14 @@ class PEARLTrainer(BaseTrainer):
             #reset env and buffer
             self.test_env.reset_task(idx)
             self.test_buffer.clear()
-            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf)
-            #todo: there is a z gap between these sampling processes
-            extra_samples, _ = self.collect_data(idx, self.test_env, self.num_extra_rl_steps_posterior, 1, np.inf)
+            initial_z = {
+                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
+                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
+                        }
+            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
             self.test_buffer.add_traj(**initial_samples)
-            self.test_buffer.add_traj(**extra_samples)
+            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf, is_training=False)
+            self.test_buffer.add_traj(**posterior_samples)
             context = self.sample_context(None, is_training=False) 
             z_mean, z_var = self.agent.infer_z_posterior(context)
             z = self.agent.sample_z_from_posterior(z_mean, z_var)

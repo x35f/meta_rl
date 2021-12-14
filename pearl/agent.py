@@ -15,7 +15,6 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         reward_scale = 1.0,
         update_target_network_interval=50, 
         target_smoothing_tau=0.1,
-        alpha=0.2,
         kl_lambda=0.05,
         policy_mean_reg_weight=1e-3,
         policy_std_reg_weight=1e-3,
@@ -75,14 +74,11 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
         #hyper-parameters
         self.gamma = kwargs['gamma']
-        self.alpha = alpha
         self.reward_scale = reward_scale
         self.kl_lambda = kl_lambda
         self.policy_mean_reg_weight = policy_mean_reg_weight
         self.policy_std_reg_weight = policy_std_reg_weight
         self.policy_pre_activation_weight = policy_pre_activation_weight
-        self.tot_update_count = 0 
-        self.update_target_network_interval = update_target_network_interval
         self.target_smoothing_tau = target_smoothing_tau
 
     def update(self, train_task_indices, context_batch, data_batch):
@@ -91,7 +87,10 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         
         # infer z from context
         z_means, z_vars = self.infer_z_posterior(context_batch)
+        #print("z_means", z_means.shape)
         task_z_batch = self.sample_z_from_posterior(z_means, z_vars)
+        #print("task_z_batch", task_z_batch.shape)
+        #print("obs", obs_batch.shape)
 
         # expand z to concatenate with obs, action batches
         num_tasks, batch_size, obs_dim = obs_batch.shape
@@ -102,14 +101,17 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         next_obs_batch = next_obs_batch.view(num_tasks * batch_size, -1)
         reward_batch = reward_batch.view(num_tasks * batch_size, -1) * self.reward_scale
         done_batch = done_batch.view(num_tasks * batch_size, -1)
+        #print("o:{}\ta:{}\tno:{}\tr:{}\tdone:{}".format(obs_batch.shape, action_batch.shape, next_obs_batch.shape, reward_batch.shape, done_batch.shape))
         
         #expand z to match obs batch
         task_z_batch = [task_z.repeat(batch_size, 1) for task_z in task_z_batch]
         task_z_batch = torch.cat(task_z_batch, dim=0)
+        #print("expanded z", task_z_batch.shape)
+        #print("catted q input", torch.cat([obs_batch, action_batch, task_z_batch], dim=1).shape)
         
         #compute Q loss and context encoder loss
-        curr_state_q1_value = self.q1_network(torch.cat([obs_batch, action_batch.detach(), task_z_batch], dim=1))
-        curr_state_q2_value = self.q2_network(torch.cat([obs_batch, action_batch.detach(), task_z_batch], dim=1))
+        curr_state_q1_value = self.q1_network(torch.cat([obs_batch, action_batch, task_z_batch], dim=1))
+        curr_state_q2_value = self.q2_network(torch.cat([obs_batch, action_batch, task_z_batch], dim=1))
         with torch.no_grad():
             target_v_value = self.target_v_network(torch.cat([next_obs_batch, task_z_batch], dim=1))
         target_q_value = reward_batch + (1.0 - done_batch) * self.gamma * target_v_value
@@ -121,8 +123,9 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         #compute kl loss if use information bottleneck for context optimizer
         prior = torch.distributions.Normal(torch.zeros(self.latent_dim, device=util.device), torch.ones(self.latent_dim, device=util.device))
         posteriors = [torch.distributions.Normal(mu, torch.sqrt(var)) for mu, var in zip(torch.unbind(z_means), torch.unbind(z_vars))] #todo: inpect std
-        kl_divs = [torch.distributions.kl.kl_divergence(post, prior) for post in posteriors]
-        kl_div = torch.sum(torch.stack(kl_divs))
+        kl_divs = torch.stack([torch.distributions.kl.kl_divergence(post, prior) for post in posteriors])
+        #print("kl_divs:", kl_divs.shape)
+        kl_div = torch.sum(kl_divs)
         kl_loss = self.kl_lambda * kl_div
 
         # update context encoder and q network
@@ -142,13 +145,15 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         new_curr_action_info = self.policy_network.sample(policy_input)
         new_curr_actions = new_curr_action_info['action_scaled']
         new_curr_action_log_probs = new_curr_action_info['log_prob']
+        #print("log_prob", new_curr_action_log_probs.shape)
         new_curr_action_means = new_curr_action_info['action_raw_mean']
         new_curr_action_log_stds = new_curr_action_info['action_raw_log_std']
         new_curr_action_pre_tanh_values = new_curr_action_info['action_prev_tanh']
 
         curr_state_v_value = self.v_network(torch.cat([obs_batch, task_z_batch.detach()], dim=1))
-        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
-        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
+        #print("curr v", curr_state_v_value.shape)
+        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_curr_actions.detach(), task_z_batch.detach()], dim=1))
+        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions.detach(), task_z_batch.detach()], dim=1))
         new_min_q = torch.min(new_curr_state_q1_value, new_curr_state_q2_value)
         new_target_v_value = new_min_q - new_curr_action_log_probs
         v_loss = F.mse_loss(new_target_v_value.detach(), curr_state_v_value)
@@ -159,9 +164,10 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
         #compute loss w.r.t policy function
         target_prob_loss = torch.mean(new_curr_action_log_probs - new_min_q)
+        #print("log prob:{}, min_q:{}\ttarget:{}".format(new_curr_action_log_probs.shape, new_min_q.shape, target_prob_loss.shape))
         
-        mean_reg_loss = torch.mean(self.policy_mean_reg_weight * (new_curr_action_means ** 2))
-        std_reg_loss = torch.mean(self.policy_std_reg_weight * (new_curr_action_log_stds ** 2))
+        mean_reg_loss = self.policy_mean_reg_weight * (new_curr_action_means ** 2).mean()
+        std_reg_loss = self.policy_std_reg_weight * (new_curr_action_log_stds ** 2).mean()
         pre_activation_reg_loss = self.policy_pre_activation_weight * ((new_curr_action_pre_tanh_values ** 2).sum(dim=1).mean())
         policy_loss = target_prob_loss + mean_reg_loss + std_reg_loss + pre_activation_reg_loss
 
@@ -174,6 +180,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         self.try_update_target_network()
         
         kl_subject = "loss/kl_div" if self.use_information_bottleneck else "stats/kl_div"
+        #exit(0)
         return {
             "loss/q1": q1_loss.item(), 
             "loss/q2": q2_loss.item(), 
