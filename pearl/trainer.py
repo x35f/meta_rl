@@ -23,7 +23,6 @@ class PEARLTrainer(BaseTrainer):
             num_steps_posterior=0, 
             num_extra_rl_steps_posterior=400,
             num_updates_per_iteration=2000,
-            num_evaluations=2,
             adaptation_context_update_interval=1,
             num_adaptation_trajectories_before_posterior_sampling=1,
             num_steps_per_iteration=50,
@@ -56,7 +55,6 @@ class PEARLTrainer(BaseTrainer):
         self.num_steps_posterior = num_steps_posterior
         self.num_extra_rl_steps_posterior = num_extra_rl_steps_posterior
         self.num_updates_per_iteration = num_updates_per_iteration
-        self.num_evaluations = num_evaluations
         self.adaptation_context_update_interval = adaptation_context_update_interval
         self.num_adaptation_trajectories_before_posterior_sampling = num_adaptation_trajectories_before_posterior_sampling
         self.num_steps_per_iteration = num_steps_per_iteration
@@ -219,7 +217,7 @@ class PEARLTrainer(BaseTrainer):
             #todo: there is a z gap between these sampling processes
             #print("adding initial samples", )
             self.test_buffer.add_traj(**initial_samples)
-            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf, is_training=False)
+            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1,self.adaptation_context_update_interval, is_training=False)
             self.test_buffer.add_traj(**posterior_samples)
             context = self.sample_context(None, is_training=False) 
             z_means, z_vars = self.agent.infer_z_posterior(context)
@@ -314,7 +312,7 @@ class PEARLTrainer(BaseTrainer):
                         }
             initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
             self.test_buffer.add_traj(**initial_samples)
-            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, np.inf, is_training=False)
+            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, self.adaptation_context_update_interval, is_training=False)
             self.test_buffer.add_traj(**posterior_samples)
             context = self.sample_context(None, is_training=False) 
             z_mean, z_var = self.agent.infer_z_posterior(context)
