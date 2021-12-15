@@ -17,7 +17,6 @@
   "agent":{
     "gamma": 0.99,
     "reward_scale": 5.0,
-    "update_target_network_interval": 1,
     "target_smoothing_tau": 0.005,
     "latent_dim": 5,
     "use_information_bottleneck": true,
