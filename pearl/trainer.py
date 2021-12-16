@@ -24,11 +24,12 @@ class PEARLTrainer(BaseTrainer):
             num_extra_rl_steps_posterior=400,
             num_updates_per_iteration=2000,
             adaptation_context_update_interval=1,
-            num_adaptation_trajectories_before_posterior_sampling=1,
+            num_test_posterior_trajs=2,
             num_steps_per_iteration=50,
             max_trajectory_length=200,
             test_interval=20,
             num_test_trajectories=5,
+            num_test_rounds=2, 
             save_model_interval=2000,
             start_timestep=2000,
             save_video_demo_interval=10000,
@@ -56,11 +57,12 @@ class PEARLTrainer(BaseTrainer):
         self.num_extra_rl_steps_posterior = num_extra_rl_steps_posterior
         self.num_updates_per_iteration = num_updates_per_iteration
         self.adaptation_context_update_interval = adaptation_context_update_interval
-        self.num_adaptation_trajectories_before_posterior_sampling = num_adaptation_trajectories_before_posterior_sampling
+        self.num_test_posterior_trajs = num_test_posterior_trajs
         self.num_steps_per_iteration = num_steps_per_iteration
         self.max_trajectory_length = max_trajectory_length
         self.test_interval = test_interval
         self.num_test_trajectories = num_test_trajectories
+        self.num_test_rounds = num_test_rounds
         self.save_model_interval = save_model_interval
         self.start_timestep = start_timestep
         self.save_video_demo_interval = save_video_demo_interval
@@ -206,33 +208,49 @@ class PEARLTrainer(BaseTrainer):
         return return_list
                 
     def test(self):
-        test_traj_returns = []
+        task_traj_returns = []
         for idx in range(self.num_test_tasks):
-            #reset env and buffer
-            self.test_env.reset_task(idx)
-            self.test_buffer.clear()
-            traj_returns =[]
-            initial_z = {
-                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
-                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
-                        }
-            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
-            #todo: there is a z gap between these sampling processes
-            #print("adding initial samples", )
-            self.test_buffer.add_traj(**initial_samples)
-            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1,self.adaptation_context_update_interval, is_training=False)
-            self.test_buffer.add_traj(**posterior_samples)
-            context = self.sample_context(None, is_training=False) 
-            z_means, z_vars = self.agent.infer_z_posterior(context)
-            z = self.agent.sample_z_from_posterior(z_means, z_vars)
-            for traj_idx in range(self.num_test_trajectories):
-                test_data = self.rollout_trajectory(self.test_env, z, deterministic=True)
-                traj_return = test_data['return']
-                traj_returns.append(traj_return)
-            test_traj_returns.append(np.mean(traj_returns))
-        test_traj_mean_return = np.mean(test_traj_returns)
-        return {"return/test": test_traj_mean_return
-        }
+            traj_returns = []
+            for round in range(self.num_test_rounds):
+                self.test_env.reset_task(idx)
+                self.test_buffer.clear()
+                
+                # prior sample
+                initial_z = {
+                    "z_mean": torch.zeros((1, self.agent.latent_dim), device=util.device), 
+                    "z_var": torch.ones((1, self.agent.latent_dim), device=util.device)
+                }
+                prior_samples, _ = self.collect_data(idx, self.test_env, num_samples=self.max_trajectory_length, 
+                                                                        resample_z_rate=1, 
+                                                                        update_posterior_rate=np.inf, 
+                                                                        is_training=False, 
+                                                                        initial_z=initial_z)
+                self.test_buffer.add_traj(**prior_samples)
+
+                # posterior sample
+                for _ in self.num_test_posterior_trajs: 
+                    posterior_samples, _ = self.collect_data(idx, self.test_env, num_samples=self.max_trajectory_length, 
+                                                                                resample_z_rate=1, 
+                                                                                update_posterior_rate=self.adaptation_context_update_interval,
+                                                                                is_training=False, 
+                                                                                )
+                    self.test_buffer.add_traj(**posterior_samples)
+
+                # test
+                context = self.sample_context(None, is_training=False)
+                z_means, z_vars = self.agent.infer_z_posterior(context)
+                z = self.agent.sample_z_from_posterior(z_means, z_vars)
+                for traj_idx in range(self.num_test_trajectories):
+                    test_data = self.rollout_trajectory(self.test_env, z, deterministic=True)
+                    traj_return = test_data["return"]
+                    traj_returns.append(traj_return)
+            
+            task_traj_returns.append(np.mean(traj_returns))
+
+        test_traj_mean_return = np.mean(task_traj_returns)
+        return {
+            "return/test": test_traj_mean_return
+        }                                                          
 
     def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, is_training, initial_z=None):
         num_samples_collected = 0
