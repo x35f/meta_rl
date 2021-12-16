@@ -66,11 +66,11 @@
     "adaptation_context_update_interval": 1,
     "num_adaptation_trajectories_before_posterior_sampling": 1,
     "max_trajectory_length":200,
-    "test_interval": 5,
+    "test_interval": 1,
     "num_test_trajectories": 10,
     "save_model_interval": 10,
     "start_timestep": 2000,
     "save_video_demo_interval": 10,
-    "log_interval": 5
+    "log_interval": 1
   }
 }
