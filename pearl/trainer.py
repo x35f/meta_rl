@@ -89,7 +89,7 @@ class PEARLTrainer(BaseTrainer):
                         'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
                         }
                     initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z)
-                    #self.train_encoder_buffers[idx].add_traj(**initial_samples)
+                    self.train_encoder_buffers[idx].add_traj(**initial_samples)
                     self.train_replay_buffers[idx].add_traj(**initial_samples)
                     self.tot_env_steps += len(initial_samples['obs_list'])
             #sample data from train_tasks
