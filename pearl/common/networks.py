@@ -168,8 +168,8 @@ class GaussianPolicyNetwork(BasePolicyNetwork):
                  act_fn: str = "relu", 
                  out_act_fn: str = "identity", 
                  re_parameterize: bool = True,
-                 log_var_min: int = None, 
-                 log_var_max: int = None, 
+                 log_var_min: int = -20, 
+                 log_var_max: int = 2, 
                  *args, **kwargs
         ):
         super(GaussianPolicyNetwork, self).__init__(input_dim, action_space, hidden_dims, act_fn)

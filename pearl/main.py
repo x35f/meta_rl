@@ -47,9 +47,9 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     num_train_tasks = args['common']['num_train_tasks']
     num_test_tasks = args['common']['num_test_tasks']
     train_env = get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True)
-    train_env = NormalizedBoxEnv(train_env)
+    train_env = BaseEnvWrapper(train_env)
     test_env = get_env(env_name, n_tasks=num_test_tasks, randomize_tasks=True)
-    test_env = NormalizedBoxEnv(test_env)
+    test_env = BaseEnvWrapper(test_env)
     state_space = train_env.observation_space
     action_space = train_env.action_space
 

@@ -114,7 +114,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         curr_state_q2_value = self.q2_network(torch.cat([obs_batch, action_batch, task_z_batch], dim=1))
         with torch.no_grad():
             target_v_value = self.target_v_network(torch.cat([next_obs_batch, task_z_batch], dim=1))
-        target_q_value = reward_batch + (1.0 - done_batch) * self.gamma * target_v_value
+        target_q_value = reward_batch + (1.0 - done_batch) * self.gamma *  target_v_value
         #compute q loss
         q1_loss = F.mse_loss(curr_state_q1_value, target_q_value)
         q2_loss =  F.mse_loss(curr_state_q2_value, target_q_value)
@@ -152,8 +152,8 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
         curr_state_v_value = self.v_network(torch.cat([obs_batch, task_z_batch.detach()], dim=1))
         #print("curr v", curr_state_v_value.shape)
-        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_curr_actions.detach(), task_z_batch.detach()], dim=1))
-        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions.detach(), task_z_batch.detach()], dim=1))
+        new_curr_state_q1_value = self.q1_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
+        new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
         new_min_q = torch.min(new_curr_state_q1_value, new_curr_state_q2_value)
         new_target_v_value = new_min_q - new_curr_action_log_probs
         v_loss = F.mse_loss(new_target_v_value.detach(), curr_state_v_value)
@@ -185,6 +185,14 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             "loss/q1": q1_loss.item(), 
             "loss/q2": q2_loss.item(), 
             "loss/v": v_loss.item(),
+            "stats/log_prob": torch.abs(new_curr_action_log_probs).mean().item(),
+            "stats/reward": reward_batch.mean().item(),
+            "stats/reward_abs": torch.abs(reward_batch).mean().item(),
+            "stats/target_v": target_v_value.mean().item(),
+            "stats/target_q": target_q_value.mean().item(),
+            "stats/v_pred": curr_state_v_value.mean().item(),
+            "stats/min_q": torch.mean(new_min_q).item(),
+            "stats/min_q_abs": torch.abs(new_min_q).mean().item(),
             "loss/mean_reg": mean_reg_loss.item(),
             "loss/std_reg": std_reg_loss.item(),
             "loss/pre_activation_reg": pre_activation_reg_loss.item(),
@@ -192,12 +200,12 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             "loss/policy": policy_loss.item(), 
             kl_subject: kl_loss.item(), 
             **{
-                f"stats/train_z_mean/{train_task_indices[i]}":torch.norm(z_means[i]).item() 
-                    for i in range(len(train_task_indices))
+                f"stats/train_z_mean/{train_task_indices[i]}":torch.abs(z_means[i]).mean().item() 
+                    for i in range(len(train_task_indices)) if train_task_indices[i] < 5
             }, 
             **{
-                f"stats/train_z_var/{train_task_indices[i]}":torch.norm(z_means[i]).item()
-                    for i in range(len(train_task_indices))
+                f"stats/train_z_var/{train_task_indices[i]}":torch.abs(z_vars[i]).mean().item()
+                    for i in range(len(train_task_indices)) if train_task_indices[i] < 5
             }
         }
 
@@ -231,7 +239,8 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
     def try_update_target_network(self):
         util.soft_update_network(self.v_network, self.target_v_network, self.target_smoothing_tau)
-            
+
+    @torch.no_grad()  
     def select_action(self, state, z, deterministic=False):
         if type(state) != torch.tensor:
             state = torch.FloatTensor(np.array([state])).to(util.device)
