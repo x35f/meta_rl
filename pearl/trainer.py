@@ -289,6 +289,9 @@ class PEARLTrainer(BaseTrainer):
             reward_list.append(reward)
             done_list.append(done)
             traj_length += 1
+
+            # IMPORTANT: remember to step the observation :)
+            obs = next_obs
         return {
             'obs_list': obs_list, 
             'action_list': action_list, 

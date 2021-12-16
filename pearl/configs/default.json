@@ -1,12 +1,12 @@
 {
-  "env_name": "",
+  "env_name": "cheetah-dir",
   "env":{
     "randomize_tasks": true
   },
   "common":{
     "use_next_obs_in_context": false,
-    "num_train_tasks": -1,
-    "num_test_tasks": -1
+    "num_train_tasks": 2,
+    "num_test_tasks": 2
   },
   "replay_buffer":{
     "max_buffer_size": 100000
@@ -56,7 +56,7 @@
   "trainer":{
     "batch_size": 256,
     "z_inference_batch_size": 64,
-    "max_iteration": 500,
+    "max_iteration": 1000,
     "num_tasks_per_gradient_update": 16,
     "num_train_tasks_to_sample_per_iteration": 5, 
     "num_steps_prior": 400, 
@@ -66,11 +66,11 @@
     "adaptation_context_update_interval": 1,
     "num_adaptation_trajectories_before_posterior_sampling": 1,
     "max_trajectory_length":200,
-    "test_interval": 1,
+    "test_interval": 5,
     "num_test_trajectories": 10,
     "save_model_interval": 10,
     "start_timestep": 2000,
     "save_video_demo_interval": 10,
-    "log_interval": 1
+    "log_interval": 5
   }
 }
