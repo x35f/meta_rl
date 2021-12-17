@@ -228,7 +228,7 @@ class PEARLTrainer(BaseTrainer):
                 self.test_buffer.add_traj(**prior_samples)
 
                 # posterior sample
-                for _ in self.num_test_posterior_trajs: 
+                for _ in range(self.num_test_posterior_trajs): 
                     posterior_samples, _ = self.collect_data(idx, self.test_env, num_samples=self.max_trajectory_length, 
                                                                                 resample_z_rate=1, 
                                                                                 update_posterior_rate=self.adaptation_context_update_interval,
