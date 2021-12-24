@@ -156,7 +156,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         new_curr_state_q2_value = self.q2_network(torch.cat([obs_batch, new_curr_actions, task_z_batch.detach()], dim=1))
         new_min_q = torch.min(new_curr_state_q1_value, new_curr_state_q2_value)
         new_target_v_value = new_min_q - new_curr_action_log_probs
-        v_loss = F.mse_loss(new_target_v_value.detach(), curr_state_v_value)
+        v_loss = F.mse_loss(curr_state_v_value, new_target_v_value.detach())
         self.v_optimizer.zero_grad()
         v_loss.backward()
         self.v_optimizer.step()
