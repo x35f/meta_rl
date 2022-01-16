@@ -10,46 +10,37 @@ import torch
 from unstable_baselines.common import util 
 
 class PEARLTrainer(BaseTrainer):
-    def __init__(self, agent, train_env, test_env, train_replay_buffers, train_encoder_buffers, test_buffer, logger, load_dir,
-            batch_size=32,
-            z_inference_batch_size=64,
-            use_next_obs_in_context=False,
-            max_iteration=500,
-            num_tasks_per_gradient_update=16,
-            num_train_tasks=50,
-            num_test_tasks=2,
-            num_train_tasks_to_sample_per_iteration=5, 
-            num_steps_prior=400, 
-            num_steps_posterior=0, 
-            num_extra_rl_steps_posterior=400,
-            num_updates_per_iteration=2000,
-            adaptation_context_update_interval=1,
-            num_test_posterior_trajs=2,
-            num_steps_per_iteration=50,
-            max_trajectory_length=200,
-            test_interval=20,
-            num_test_trajectories=5,
-            num_test_rounds=2, 
-            save_model_interval=2000,
-            start_timestep=2000,
-            save_video_demo_interval=10000,
-            log_interval=1,
+    def __init__(self, agent, train_env, eval_env, train_replay_buffers, train_encoder_buffers, eval_buffer, load_dir,
+            batch_size,
+            z_inference_batch_size,
+            use_next_obs_in_context,
+            max_epoch,
+            num_tasks_per_gradient_update,
+            num_train_tasks,
+            num_eval_tasks,
+            num_train_tasks_to_sample_per_iteration, 
+            num_steps_prior, 
+            num_steps_posterior, 
+            num_extra_rl_steps_posterior,
+            num_updates_per_iteration,
+            adaptation_context_update_interval,
+            num_eval_posterior_trajs,
+            start_timestep,
             **kwargs):
-        print("redundant arguments for trainer: {}".format(kwargs))
+        super(PEARLTrainer, self).__init__(agent, train_env, eval_env, **kwargs)
         self.agent = agent
         self.train_replay_buffers = train_replay_buffers
         self.train_encoder_buffers = train_encoder_buffers
-        self.test_buffer = test_buffer
-        self.logger = logger
+        self.eval_buffer = eval_buffer
         self.train_env = train_env 
-        self.test_env = test_env
+        self.eval_env = eval_env
         #hyperparameters
         self.batch_size = batch_size
         self.z_inference_batch_size = z_inference_batch_size
         self.use_next_obs_in_context = use_next_obs_in_context
         self.num_train_tasks = num_train_tasks
-        self.num_test_tasks = num_test_tasks
-        self.max_iteration = max_iteration
+        self.num_eval_tasks = num_eval_tasks
+        self.max_epoch = max_epoch
         self.num_tasks_per_gradient_update = num_tasks_per_gradient_update
         self.num_train_tasks_to_sample_per_iteration = num_train_tasks_to_sample_per_iteration
         self.num_steps_prior = num_steps_prior
@@ -57,16 +48,8 @@ class PEARLTrainer(BaseTrainer):
         self.num_extra_rl_steps_posterior = num_extra_rl_steps_posterior
         self.num_updates_per_iteration = num_updates_per_iteration
         self.adaptation_context_update_interval = adaptation_context_update_interval
-        self.num_test_posterior_trajs = num_test_posterior_trajs
-        self.num_steps_per_iteration = num_steps_per_iteration
-        self.max_trajectory_length = max_trajectory_length
-        self.test_interval = test_interval
-        self.num_test_trajectories = num_test_trajectories
-        self.num_test_rounds = num_test_rounds
-        self.save_model_interval = save_model_interval
+        self.num_eval_posterior_trajs = num_eval_posterior_trajs
         self.start_timestep = start_timestep
-        self.save_video_demo_interval = save_video_demo_interval
-        self.log_interval = log_interval
         if load_dir != "":
             if  os.path.exists(load_dir):
                 self.agent.load(load_dir)
@@ -74,24 +57,27 @@ class PEARLTrainer(BaseTrainer):
                 print("Load dir {} Not Found".format(load_dir))
                 exit(0)
 
+    def warmup(self):
+        for idx in range(self.num_train_tasks):
+            self.train_env.reset_task(idx)
+            initial_z = {
+                'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
+                'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
+                }
+            initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z)
+            self.train_encoder_buffers[idx].add_traj(**initial_samples)
+            self.train_replay_buffers[idx].add_traj(**initial_samples)
+
     def train(self):
-        train_traj_rewards = [0]
-        iteration_durations = []
-        self.tot_env_steps = 0
-        for ite in tqdm(range(self.max_iteration)): 
+        train_traj_returns = [0]
+        #collect initial pool of data
+        self.warmup()
+        tot_env_steps = self.start_timestep * self.num_train_tasks
+        for epoch_id in tqdm(range(self.max_epoch)): 
+            self.pre_iter()
+            log_infos = {}
+
             train_task_returns = []
-            iteration_start_time = time()
-            if ite == 0: # collect initial pool of data
-                for idx in range(self.num_train_tasks):
-                    self.train_env.reset_task(idx)
-                    initial_z = {
-                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
-                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
-                        }
-                    initial_samples, _ = self.collect_data(idx, self.train_env, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z)
-                    self.train_encoder_buffers[idx].add_traj(**initial_samples)
-                    self.train_replay_buffers[idx].add_traj(**initial_samples)
-                    self.tot_env_steps += len(initial_samples['obs_list'])
             #sample data from train_tasks
             for idx in range(self.num_train_tasks_to_sample_per_iteration):
                 train_task_idx = random.choice(range(self.num_train_tasks)) # the same sampling method as the source code
@@ -121,44 +107,25 @@ class PEARLTrainer(BaseTrainer):
                     self.train_replay_buffers[train_task_idx].add_traj(**extra_posterior_samples)
                     #does not add to encoder buffer since it's extra posterior
                 
-                self.tot_env_steps += len(prior_samples['obs_list']) + len(posterior_samples['obs_list']) + len(extra_posterior_samples['obs_list'])
+                tot_env_steps += len(prior_samples['obs_list']) + len(posterior_samples['obs_list']) + len(extra_posterior_samples['obs_list'])
                 train_task_returns.append(np.mean(extra_posterior_returns))
             
             #perform training on batches of train tasks
             for train_step in range(self.num_updates_per_iteration):
                 train_task_indices = np.random.choice(range(self.num_train_tasks), self.num_tasks_per_gradient_update)
-                loss_dict = self.train_step(train_task_indices)
+                train_agent_loss_dict = self.train_step(train_task_indices)
 
-            train_traj_rewards.append(np.mean(train_task_returns))
-            #post iteration logging
-            iteration_end_time = time()
-            iteration_duration = iteration_end_time - iteration_start_time
-            iteration_durations.append(iteration_duration)
-            if ite % self.log_interval == 0:
-                self.logger.log_var('return/train', train_traj_rewards[-1], self.tot_env_steps)
-                for loss_name in loss_dict:
-                    self.logger.log_var(loss_name, loss_dict[loss_name], self.tot_env_steps)
-                self.logger.log_var("time/train_iteration_duration", iteration_duration, self.tot_env_steps)
-            if ite % self.test_interval == 0:
-                log_dict = self.test()
-                avg_test_reward = log_dict['return/test']
-                for log_key in log_dict:
-                    self.logger.log_var(log_key, log_dict[log_key], self.tot_env_steps)
-                remaining_seconds = int((self.max_iteration - ite + 1) * np.mean(iteration_durations[-100:]))
-                time_remaining_str = second_to_time_str(remaining_seconds)
-                summary_str = "iteration {}/{}:\ttrain return {:.02f}\ttest return {:02f}\teta: {}".format(ite, self.max_iteration, train_traj_rewards[-1],avg_test_reward,time_remaining_str)
-                self.logger.log_str(summary_str)
-            if ite % self.save_model_interval == 0:
-                self.agent.save_model(self.tot_env_steps)
-            if ite % self.save_video_demo_interval == 0:
-                self.save_video_demo(self.tot_env_steps)
+            train_traj_returns.append(np.mean(train_task_returns))
+            log_infos['performance/train_return'] = train_traj_returns
+            log_infos.update(train_agent_loss_dict)
+            self.post_iter(log_infos, tot_env_steps)
 
     def train_step(self, train_task_indices):
         # sample train context
         context_batch = self.sample_context(train_task_indices, is_training=True)
         
         #sample data for sac update
-        data_batch = [self.train_replay_buffers[idx].sample_batch(batch_size=self.batch_size) for idx in train_task_indices]
+        data_batch = [self.train_replay_buffers[idx].sample(batch_size=self.batch_size) for idx in train_task_indices]
         data_batch = [self.unpack_context_batch(data) for data in data_batch]
         data_batch = [[x[i] for x in data_batch] for i in range(len(data_batch[0]))]
         data_batch = [torch.cat(x, dim=0) for x in data_batch]
@@ -171,10 +138,10 @@ class PEARLTrainer(BaseTrainer):
 
     def sample_context(self, indices, is_training):
         if is_training:
-            contexts = [self.train_encoder_buffers[idx].sample_batch(self.z_inference_batch_size) for idx in indices]
+            contexts = [self.train_encoder_buffers[idx].sample(self.z_inference_batch_size) for idx in indices]
             # task_num,  [states, actions, next_states, rewards, dones] of length batch_size
         else:
-            contexts = [self.test_buffer.sample_batch(self.z_inference_batch_size)]
+            contexts = [self.eval_buffer.sample(self.z_inference_batch_size)]
         contexts = [self.unpack_context_batch(context_batch) for context_batch in contexts]
         contexts = [[x[i] for x in contexts] for i in range(len(contexts[0]))]
         contexts = [torch.cat(x, dim=0) for x in contexts]
@@ -207,49 +174,49 @@ class PEARLTrainer(BaseTrainer):
                 curr_traj_return = 0
         return return_list
                 
-    def test(self):
+    def evaluate(self):
         task_traj_returns = []
-        for idx in range(self.num_test_tasks):
+        for idx in range(self.num_eval_tasks):
             traj_returns = []
-            for round in range(self.num_test_rounds):
-                self.test_env.reset_task(idx)
-                self.test_buffer.clear()
+            for round in range(self.num_eval_rounds):
+                self.eval_env.reset_task(idx)
+                self.eval_buffer.clear()
                 
                 # prior sample
                 initial_z = {
                     "z_mean": torch.zeros((1, self.agent.latent_dim), device=util.device), 
                     "z_var": torch.ones((1, self.agent.latent_dim), device=util.device)
                 }
-                prior_samples, _ = self.collect_data(idx, self.test_env, num_samples=self.max_trajectory_length, 
+                prior_samples, _ = self.collect_data(idx, self.eval_env, num_samples=self.max_trajectory_length, 
                                                                         resample_z_rate=1, 
                                                                         update_posterior_rate=np.inf, 
                                                                         is_training=False, 
                                                                         initial_z=initial_z)
-                self.test_buffer.add_traj(**prior_samples)
+                self.eval_buffer.add_traj(**prior_samples)
 
                 # posterior sample
-                for _ in range(self.num_test_posterior_trajs): 
-                    posterior_samples, _ = self.collect_data(idx, self.test_env, num_samples=self.max_trajectory_length, 
+                for _ in range(self.num_eval_posterior_trajs): 
+                    posterior_samples, _ = self.collect_data(idx, self.eval_env, num_samples=self.max_trajectory_length, 
                                                                                 resample_z_rate=1, 
                                                                                 update_posterior_rate=self.adaptation_context_update_interval,
                                                                                 is_training=False, 
                                                                                 )
-                    self.test_buffer.add_traj(**posterior_samples)
+                    self.eval_buffer.add_traj(**posterior_samples)
 
-                # test
+                # eval
                 context = self.sample_context(None, is_training=False)
                 z_means, z_vars = self.agent.infer_z_posterior(context)
                 z = self.agent.sample_z_from_posterior(z_means, z_vars)
-                for traj_idx in range(self.num_test_trajectories):
-                    test_data = self.rollout_trajectory(self.test_env, z, deterministic=True)
-                    traj_return = test_data["return"]
+                for traj_idx in range(self.num_eval_trajectories):
+                    eval_data = self.rollout_trajectory(self.eval_env, z, deterministic=True)
+                    traj_return = eval_data["return"]
                     traj_returns.append(traj_return)
             
             task_traj_returns.append(np.mean(traj_returns))
 
-        test_traj_mean_return = np.mean(task_traj_returns)
+        eval_traj_mean_return = np.mean(task_traj_returns)
         return {
-            "return/test": test_traj_mean_return
+            "performance/evaluation": eval_traj_mean_return
         }                                                          
 
     def collect_data(self, task_idx, env, num_samples, resample_z_rate, update_posterior_rate, is_training, initial_z=None):
@@ -327,18 +294,18 @@ class PEARLTrainer(BaseTrainer):
         ite_video_demo_dir = os.path.join(video_demo_dir, "ite_{}".format(ite))
         os.mkdir(ite_video_demo_dir)
         video_size = (height, width)
-        for idx in range(self.num_test_tasks):
+        for idx in range(self.num_eval_tasks):
             #reset env and buffer
-            self.test_env.reset_task(idx)
-            self.test_buffer.clear()
+            self.eval_env.reset_task(idx)
+            self.eval_buffer.clear()
             initial_z = {
                         'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
                         'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
                         }
-            initial_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
-            self.test_buffer.add_traj(**initial_samples)
-            posterior_samples, _ = self.collect_data(idx, self.test_env, self.num_steps_posterior, 1, self.adaptation_context_update_interval, is_training=False)
-            self.test_buffer.add_traj(**posterior_samples)
+            initial_samples, _ = self.collect_data(idx, self.eval_env, self.num_steps_prior, 1, np.inf, is_training=False, initial_z=initial_z)
+            self.eval_buffer.add_traj(**initial_samples)
+            posterior_samples, _ = self.collect_data(idx, self.eval_env, self.num_steps_posterior, 1, self.adaptation_context_update_interval, is_training=False)
+            self.eval_buffer.add_traj(**posterior_samples)
             context = self.sample_context(None, is_training=False) 
             z_mean, z_var = self.agent.infer_z_posterior(context)
             z = self.agent.sample_z_from_posterior(z_mean, z_var)
@@ -349,13 +316,13 @@ class PEARLTrainer(BaseTrainer):
             video_writer = cv2.VideoWriter(video_save_path, fourcc, fps, video_size)
 
             #rollout to generate pictures and write video
-            state = self.test_env.reset()
-            img = self.test_env.render(mode="rgb_array", width=width, height=height)
+            state = self.eval_env.reset()
+            img = self.eval_env.render(mode="rgb_array", width=width, height=height)
             for step in range(self.max_trajectory_length):
                 action, _ = self.agent.select_action(state, z, deterministic=True)
-                next_state, reward, done, _ = self.test_env.step(action)
+                next_state, reward, done, _ = self.eval_env.step(action)
                 state = next_state
-                img = self.test_env.render(mode="rgb_array", width=width, height=height)
+                img = self.eval_env.render(mode="rgb_array", width=width, height=height)
                 video_writer.write(img)
                 if done:
                     break 

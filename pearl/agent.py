@@ -4,21 +4,19 @@ import gym
 import os
 from torch import nn
 from unstable_baselines.common.agents import BaseAgent
-from .common.networks import MLPNetwork, GaussianPolicyNetwork, get_optimizer
-from unstable_baselines.common.buffer import ReplayBuffer
+from unstable_baselines.common.networks import MLPNetwork, GaussianPolicyNetwork, get_optimizer
 import numpy as np
-from unstable_baselines.common import util 
+from unstable_baselines.common import util, functional
 from unstable_baselines.common.maths import product_of_gaussians
 
 class PEARLAgent(torch.nn.Module, BaseAgent):
     def __init__(self,observation_space, action_space,
-        reward_scale = 1.0,
-        update_target_network_interval=50, 
-        target_smoothing_tau=0.1,
-        kl_lambda=0.05,
-        policy_mean_reg_weight=1e-3,
-        policy_std_reg_weight=1e-3,
-        policy_pre_activation_weight=1e-5,
+        reward_scale,
+        target_smoothing_tau,
+        kl_lambda,
+        policy_mean_reg_weight,
+        policy_std_reg_weight,
+        policy_pre_activation_weight,
         **kwargs):
         obs_dim = observation_space.shape[0]
         action_dim = action_space.shape[0]
@@ -45,7 +43,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             context_encoder_output_dim = kwargs['latent_dim']
         self.context_encoder_network = MLPNetwork(context_encoder_input_dim, context_encoder_output_dim, **kwargs['context_encoder_network'])
 
-        util.soft_update_network(self.v_network, self.target_v_network, 1.0)
+        functional.soft_update_network(self.v_network, self.target_v_network, 1.0)
 
         #pass to util.device
         self.q1_network = self.q1_network.to(util.device)
@@ -185,14 +183,14 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             "loss/q1": q1_loss.item(), 
             "loss/q2": q2_loss.item(), 
             "loss/v": v_loss.item(),
-            "stats/log_prob": torch.abs(new_curr_action_log_probs).mean().item(),
-            "stats/reward": reward_batch.mean().item(),
-            "stats/reward_abs": torch.abs(reward_batch).mean().item(),
-            "stats/target_v": target_v_value.mean().item(),
-            "stats/target_q": target_q_value.mean().item(),
-            "stats/v_pred": curr_state_v_value.mean().item(),
-            "stats/min_q": torch.mean(new_min_q).item(),
-            "stats/min_q_abs": torch.abs(new_min_q).mean().item(),
+            "misc/log_prob": torch.abs(new_curr_action_log_probs).mean().item(),
+            "misc/reward": reward_batch.mean().item(),
+            "misc/reward_abs": torch.abs(reward_batch).mean().item(),
+            "misc/target_v": target_v_value.mean().item(),
+            "misc/target_q": target_q_value.mean().item(),
+            "misc/v_pred": curr_state_v_value.mean().item(),
+            "misc/min_q": torch.mean(new_min_q).item(),
+            "misc/min_q_abs": torch.abs(new_min_q).mean().item(),
             "loss/mean_reg": mean_reg_loss.item(),
             "loss/std_reg": std_reg_loss.item(),
             "loss/pre_activation_reg": pre_activation_reg_loss.item(),
@@ -200,11 +198,11 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             "loss/policy": policy_loss.item(), 
             kl_subject: kl_loss.item(), 
             **{
-                f"stats/train_z_mean/{train_task_indices[i]}":torch.abs(z_means[i]).mean().item() 
+                f"misc/train_z_mean/{train_task_indices[i]}":torch.abs(z_means[i]).mean().item() 
                     for i in range(len(train_task_indices)) if train_task_indices[i] < 5
             }, 
             **{
-                f"stats/train_z_var/{train_task_indices[i]}":torch.abs(z_vars[i]).mean().item()
+                f"misc/train_z_var/{train_task_indices[i]}":torch.abs(z_vars[i]).mean().item()
                     for i in range(len(train_task_indices)) if train_task_indices[i] < 5
             }
         }
@@ -238,7 +236,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
         return z 
 
     def try_update_target_network(self):
-        util.soft_update_network(self.v_network, self.target_v_network, self.target_smoothing_tau)
+        functional.soft_update_network(self.v_network, self.target_v_network, self.target_smoothing_tau)
 
     @torch.no_grad()  
     def select_action(self, state, z, deterministic=False):

@@ -9,7 +9,7 @@ from unstable_baselines.meta_rl.pearl.trainer import PEARLTrainer
 from unstable_baselines.meta_rl.pearl.agent import PEARLAgent
 from unstable_baselines.common.util import set_device_and_logger, load_config, set_global_seed
 from unstable_baselines.common.buffer import ReplayBuffer
-from unstable_baselines.common.env_wrapper import get_env, BaseEnvWrapper, NormalizedBoxEnv
+from unstable_baselines.common.env_wrapper import get_env
 
 
 @click.command(context_settings=dict(
@@ -17,7 +17,7 @@ from unstable_baselines.common.env_wrapper import get_env, BaseEnvWrapper, Norma
     allow_extra_args=True,
 ))
 @click.argument("config-path",type=str, default="sac/configs/default_with_per.json")
-@click.option("--log-dir", default="logs/pearl")
+@click.option("--log-dir", default=os.path.join("logs", "pearl"))
 @click.option("--gpu", type=int, default=-1)
 @click.option("--print-log", type=bool, default=True)
 @click.option("--seed", type=int, default=35)
@@ -33,8 +33,7 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
 
     #initialize logger
     env_name = args['env_name']
-    logger = Logger(log_dir, prefix = env_name+"-"+info, print_to_terminal=print_log)
-    logger.log_str("logging to {}".format(logger.log_path))
+    logger = Logger(log_dir,env_name, prefix = info, print_to_terminal=print_log)
 
     #set device and logger
     set_device_and_logger(gpu, logger)
@@ -45,11 +44,9 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     #initialize environment
     logger.log_str("Initializing Environment")
     num_train_tasks = args['common']['num_train_tasks']
-    num_test_tasks = args['common']['num_test_tasks']
+    num_eval_tasks = args['common']['num_eval_tasks']
     train_env = get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True)
-    train_env = BaseEnvWrapper(train_env)
-    test_env = get_env(env_name, n_tasks=num_test_tasks, randomize_tasks=True)
-    test_env = BaseEnvWrapper(test_env)
+    eval_env = get_env(env_name, n_tasks=num_eval_tasks, randomize_tasks=True)
     state_space = train_env.observation_space
     action_space = train_env.action_space
 
@@ -57,7 +54,7 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     logger.log_str("Initializing Buffer")
     train_replay_buffers = [ReplayBuffer(state_space, action_space, **args['replay_buffer']) for _ in range(num_train_tasks)]
     train_encoder_buffers = [ReplayBuffer(state_space, action_space, **args['encoder_buffer']) for _ in range(num_train_tasks)]
-    test_buffer = ReplayBuffer(state_space, action_space, **args['encoder_buffer'])
+    eval_buffer = ReplayBuffer(state_space, action_space, **args['encoder_buffer'])
 
     #initialize agent
     logger.log_str("Initializing Agent")
@@ -68,11 +65,10 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     trainer  = PEARLTrainer(
         agent,
         train_env,
-        test_env,
+        eval_env,
         train_replay_buffers,
         train_encoder_buffers,
-        test_buffer,
-        logger,
+        eval_buffer,
         load_dir,
         **args['trainer']
     )
