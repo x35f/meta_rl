@@ -6,6 +6,7 @@
   },
   "trainer":{
     "z_inference_batch_size": 100,
+    "batch_size": 100,
     "num_extra_rl_steps_posterior": 600
   } 
 }

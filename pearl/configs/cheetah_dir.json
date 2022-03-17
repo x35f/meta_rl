@@ -2,7 +2,8 @@
   "env_name": "cheetah-dir",
   "common":{
     "num_train_tasks": 2,
-    "num_test_tasks": 2
+    "num_test_tasks": 2,
+    "use_same_tasks_for_eval": true
   },
   "trainer":{
     "max_iteration": 500,

@@ -1,12 +1,12 @@
 {
   "env_name": "cheetah-vel",
   "common":{
-    "num_train_tasks": 2,
-    "num_test_tasks": 2
+    "num_train_tasks": 10,
+    "num_test_tasks": 5
   },
   "trainer":{
-    "start_timestep": 384, 
     "z_inference_batch_size": 100,
+    "batch_size": 256,
     "num_extra_rl_steps_posterior": 600
   } 
 }

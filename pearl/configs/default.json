@@ -6,7 +6,8 @@
   "common":{
     "use_next_obs_in_context": false,
     "num_train_tasks": 2,
-    "num_eval_tasks": 2
+    "num_eval_tasks": 2,
+    "use_same_tasks_for_eval": false
   },
   "replay_buffer":{
     "max_buffer_size": 100000
@@ -21,9 +22,7 @@
     "latent_dim": 5,
     "use_information_bottleneck": true,
     "kl_lambda": 0.1,
-    "policy_mean_reg_weight": 1e-3,
-    "policy_std_reg_weight": 1e-3,
-    "policy_pre_activation_weight": 0.0,
+    "alpha": 0.2,
     "q_network":{
       "hidden_dims": [300,300, 300],
       "optimizer_class": "Adam",
@@ -31,26 +30,27 @@
       "act_fn": "relu",
       "out_act_fn": "identity"
     },
-    "v_network":{
-      "hidden_dims": [300,300, 300],
-      "optimizer_class": "Adam",
-      "learning_rate":0.0003,
-      "act_fn": "relu",
-      "out_act_fn": "identity"
-    },
     "policy_network":{
-      "hidden_dims": [300,300, 300],
+      "hidden_dims": [300, 300, 300],
       "optimizer_class": "Adam",
       "deterministic": false,
       "learning_rate":0.0003,
       "act_fn": "relu",
       "out_act_fn": "identity",
-      "re_parameterize": true
+      "re_parameterize": true,
+      "stablize_log_prob": true
     },
     "context_encoder_network":{
       "hidden_dims": [200, 200, 200],
       "optimizer_class": "Adam",
-      "learning_rate":0.0003
+      "learning_rate":0.0003,
+      "act_fn": "relu",
+      "out_act_fn": "identity"
+    },
+    "entropy":{
+      "automatic_tuning": true,
+      "learning_rate": 0.0003,
+      "optimizer_class": "Adam"
     }
   },
   "trainer":{
@@ -71,7 +71,7 @@
     "num_eval_rounds": 2, 
     "snapshot_interval": 10,
     "start_timestep": 2000,
-    "save_video_demo_interval": 10,
+    "save_video_demo_interval": -1,
     "log_interval": 1
   }
 }

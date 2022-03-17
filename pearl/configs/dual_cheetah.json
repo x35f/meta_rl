@@ -1,7 +1,7 @@
 {
   "env_name": "cheetah-vel",
   "common":{
-    "num_train_tasks": 1,
+    "num_train_tasks": 2,
     "num_test_tasks": 2
   },
   "trainer":{
@@ -11,6 +11,7 @@
     "num_updates_per_iteration":800,
     "num_tasks_per_gradient_update": 1,
     "num_train_tasks_to_sample_per_iteration": 1,
+    "save_video_demo_interval": 10,
     "max_iteration": 50000,
     "test_interval": 10
   } 
