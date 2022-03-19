@@ -55,8 +55,6 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks + num_eval_tasks, randomize_tasks=True))
     assert len(env.get_all_task_idx()) == len(set(eval_task_indices + train_task_indices))
     observation_space = env.observation_space
-    print(observation_space)
-    exit(0)
     action_space = env.action_space
 
     #initialize buffer

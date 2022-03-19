@@ -21,11 +21,12 @@ class PEARLTrainer(BaseTrainer):
             num_train_tasks_to_sample_per_iteration, 
             num_steps_prior, 
             num_steps_posterior, 
-            num_extra_rl_steps_posterior,
-            num_updates_per_iteration,
+            num_extra_steps_posterior,
+            num_updates_per_epoch,
             adaptation_context_update_interval,
             num_eval_posterior_trajs,
-            start_timestep,
+            num_eval_exploration_trajectories,
+            num_initial_steps,
             num_eval_rounds,
             **kwargs):
         super(PEARLTrainer, self).__init__(agent, env, env, **kwargs) #train env is the same as the eval env, train and eval tasks are identified by their indicies
@@ -47,12 +48,17 @@ class PEARLTrainer(BaseTrainer):
         self.num_train_tasks_to_sample_per_iteration = num_train_tasks_to_sample_per_iteration
         self.num_steps_prior = num_steps_prior
         self.num_steps_posterior = num_steps_posterior
-        self.num_extra_rl_steps_posterior = num_extra_rl_steps_posterior
-        self.num_updates_per_iteration = num_updates_per_iteration
+        self.num_extra_steps_posterior = num_extra_steps_posterior
+        self.num_updates_per_epoch = num_updates_per_epoch
         self.adaptation_context_update_interval = adaptation_context_update_interval
         self.num_eval_posterior_trajs = num_eval_posterior_trajs
+        self.num_eval_exploration_trajectories = num_eval_exploration_trajectories
         self.num_eval_rounds = num_eval_rounds
-        self.start_timestep = start_timestep
+        self.num_initial_steps = num_initial_steps
+        self.initial_z = {
+                'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
+                'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
+                }
         if load_dir != "":
             if  os.path.exists(load_dir):
                 self.agent.load(load_dir)
@@ -61,63 +67,58 @@ class PEARLTrainer(BaseTrainer):
                 exit(0)
 
     def warmup(self):
+        util.logger.log_str("Warming up")
         for task_idx in self.train_task_indices:
             self.env.reset_task(task_idx)
             initial_z = {
                 'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
                 'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
                 }
-            self.collect_data(task_idx, num_samples=self.start_timestep, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z, add_to_enc_buffer=True)
+            self.collect_data(task_idx, self.num_initial_steps, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z, add_to_enc_buffer=True, add_to_replay_buffer=True, max_trajectories=np.inf)
 
     def train(self):
         train_traj_returns = [0]
         #collect initial pool of data
         self.warmup()
-        tot_env_steps = self.start_timestep * self.num_train_tasks
+        tot_env_steps = self.num_initial_steps * self.num_train_tasks
         for epoch_id in trange(self.max_epoch, colour='blue', desc='outer loop'): 
             self.pre_iter()
             log_infos = {}
 
             train_task_returns = []
+            train_task_lengths = []
             #sample data from train_tasks
             for idx in range(self.num_train_tasks_to_sample_per_iteration):
-                train_task_idx = random.choice(self.train_task_indices) # the same sampling method as the source code
-                self.env.reset_task(train_task_idx)
-                self.train_encoder_buffers[train_task_idx].clear()
-                prior_samples, posterior_samples, extra_posterior_samples = {"obs_list":[]} ,{"obs_list":[]}, {"obs_list":[]}
+                task_idx = random.choice(self.train_task_indices) # the same sampling method as the source code
+                self.env.reset_task(task_idx)
+                self.train_encoder_buffers[task_idx].clear()
 
                 # collect some trajectories with z ~ prior
                 if self.num_steps_prior > 0:
-                    initial_z = {
-                        'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
-                        'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
-                        }
-                    self.collect_data(train_task_idx, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=initial_z, add_to_enc_buffer=True)
+                    self.collect_data(task_idx, self.num_steps_prior, resample_z_rate=1, update_posterior_rate=np.inf, is_training=True, initial_z=self.initial_z, add_to_enc_buffer=True, add_to_replay_buffer=True, max_trajectories=np.inf)
 
                 # collect some trajectories with z ~ posterior
                 if self.num_steps_posterior > 0:
-                    self.collect_data(train_task_idx, self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True, add_to_enc_buffer=True)
+                    assert self.num_steps_prior > 0
+                    self.collect_data(task_idx, self.num_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True, initial_z=self.initial_z, add_to_enc_buffer=True, add_to_replay_buffer=True, max_trajectories=np.inf) 
 
                 # trajectories from the policy handling z ~ posterior
-                if self.num_extra_rl_steps_posterior > 0:
-                    extra_posterior_returns = self.collect_data(train_task_idx, self.num_extra_rl_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True, add_to_enc_buffer=False)
+                if self.num_extra_steps_posterior > 0:
+                    assert self.num_steps_prior + self.num_steps_posterior > 0
+                    extra_posterior_returns, extra_posterior_lengths = self.collect_data(task_idx, self.num_extra_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval,  initial_z=self.initial_z, is_training=True, add_to_enc_buffer=False, add_to_replay_buffer=True, max_trajectories=np.inf)
                     #does not add to encoder buffer since it's extra posterior
+                    #todo: why use initial z
                 
-                tot_env_steps += self.num_steps_prior + self.num_steps_posterior + self.num_extra_rl_steps_posterior
+                tot_env_steps += self.num_steps_prior + self.num_steps_posterior + self.num_extra_steps_posterior
                 train_task_returns.append(np.mean(extra_posterior_returns))
-            # info_str = ""
-            # for i in range(self.num_train_tasks):
-            #     info_str += "{}: {}/{}\t".format(i, self.train_replay_buffers[i].max_sample_size, self.train_encoder_buffers[i].max_sample_size)
-            #     if (i+1) % 10 == 0:
-            #         info_str += "\n"
-            # print(info_str)
-            #perform training on batches of train tasks
-            for train_step in trange(self.num_updates_per_iteration, colour='green', desc='inner loop'):
-                train_task_indices = np.random.choice(range(self.num_train_tasks), self.num_tasks_per_gradient_update)
+                train_task_lengths.append(np.mean(extra_posterior_lengths))
+            for train_step in trange(self.num_updates_per_epoch, colour='green', desc='inner loop'):
+                train_task_indices = np.random.choice(self.train_task_indices, self.num_tasks_per_gradient_update)
                 train_agent_loss_dict = self.train_step(train_task_indices)
 
             train_traj_returns.append(np.mean(train_task_returns))
             log_infos['performance/train_return'] = train_traj_returns[-1]
+            log_infos['performance/train_length'] = train_task_lengths[-1]
             log_infos.update(train_agent_loss_dict)
             self.post_iter(log_infos, tot_env_steps)
 
@@ -126,7 +127,7 @@ class PEARLTrainer(BaseTrainer):
         context_batch = self.sample_context(train_task_indices, is_training=True)
         
         #sample data for sac update
-        data_batch = [self.train_replay_buffers[idx].sample(batch_size=self.batch_size) for idx in train_task_indices]
+        data_batch = [self.train_replay_buffers[task_idx].sample(batch_size=self.batch_size) for task_idx in train_task_indices]
         data_batch = [self.unpack_context_batch(data) for data in data_batch]
         data_batch = [[x[i] for x in data_batch] for i in range(len(data_batch[0]))]
         data_batch = [torch.cat(x, dim=0) for x in data_batch]
@@ -142,7 +143,8 @@ class PEARLTrainer(BaseTrainer):
             contexts = [self.train_encoder_buffers[idx].sample(batch_size=self.z_inference_batch_size) for idx in indices]
             # task_num,  [states, actions, next_states, rewards, dones] of length batch_size
         else:
-            contexts = [self.eval_buffer.sample(self.z_inference_batch_size)]
+            #sample all contexts for evaluation
+            contexts = [self.eval_buffer.sample(self.eval_buffer.max_sample_size)]
         contexts = [self.unpack_context_batch(context_batch) for context_batch in contexts]
         contexts = [[x[i] for x in contexts] for i in range(len(contexts[0]))]
         contexts = [torch.cat(x, dim=0) for x in contexts]
@@ -176,43 +178,93 @@ class PEARLTrainer(BaseTrainer):
         return return_list
                 
     def evaluate(self):
-        #copy env parameters from train env to eval env
-        task_traj_returns = []
-        for idx in self.eval_task_indices:
+        eval_stats = {}
+        #direct eval on train tasks using train encoder buffer (follow the original implementation)
+        train_eval_task_indices = np.random.choice(self.train_task_indices, len(self.eval_task_indices))
+        train_task_traj_returns = []
+        train_task_traj_lengths = []
+        for task_idx in train_eval_task_indices:
+            self.env.reset_task(task_idx)
             traj_returns = []
+            traj_lengths = []
+            traj_returns, traj_lengths = self.collect_data(task_idx, max_samples=np.inf, resample_z_rate=1, update_posterior_rate=1, is_training=True, initial_z=None, add_to_enc_buffer=False, add_to_replay_buffer=False, max_trajectories=self.num_eval_trajectories, deterministic=True)
+            train_task_traj_returns.append(np.mean(traj_returns))
+            train_task_traj_lengths.append(np.mean(traj_lengths))
+        eval_stats['performance/train raw eval return'] = np.mean(train_task_traj_returns)
+        eval_stats['performance/train raw eval length'] = np.mean(train_task_traj_lengths)
+
+        #online eval on train tasks
+        all_final_returns = []
+        all_online_returns = []
+        all_final_lengths = []
+        all_online_lengths = []
+        for task_idx in train_eval_task_indices:
+            self.env.reset_task(task_idx)
+            final_task_returns = []
+            final_task_lengths = []
+            online_task_returns = []
+            online_task_lengths = []
             for round in range(self.num_eval_rounds):
-                self.eval_env.reset_task(idx)
                 self.eval_buffer.clear()
-                
-                # prior sample
-                initial_z = {
-                    "z_mean": torch.zeros((1, self.agent.latent_dim), device=util.device), 
-                    "z_var": torch.ones((1, self.agent.latent_dim), device=util.device)
-                }
-                self.collect_data(idx,num_samples=self.max_trajectory_length, 
-                                                            resample_z_rate=1,  update_posterior_rate=np.inf, 
-                                                            is_training=False, initial_z=initial_z)
+                #initial exploration
+                exploration_returns, exploration_lengths = self.collect_data(task_idx, max_samples=np.inf, resample_z_rate=np.inf, update_posterior_rate=np.inf, is_training=False, initial_z=self.initial_z, add_to_enc_buffer=True, add_to_replay_buffer=False, max_trajectories=self.num_eval_exploration_trajectories, deterministic=True)#add context to eval buffer by setting is_training to False
 
-                # posterior sample
-                for _ in range(self.num_eval_posterior_trajs): 
-                    self.collect_data(idx, num_samples=self.max_trajectory_length, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval,is_training=False)
+                #eval rollout
+                final_returns, final_lengths = self.collect_data(task_idx, max_samples=np.inf, resample_z_rate=1, update_posterior_rate=1, is_training=False, add_to_enc_buffer=True, add_to_replay_buffer=False,max_trajectories=self.num_eval_trajectories, deterministic=True)
 
-                # eval
-                context = self.sample_context(None, is_training=False)
-                z_means, z_vars = self.agent.infer_z_posterior(context)
-                z = self.agent.sample_z_from_posterior(z_means, z_vars)
-                for traj_idx in range(self.num_eval_trajectories):
-                    eval_data, traj_return = self.rollout_trajectory(z, deterministic=True)
-                    traj_returns.append(traj_return)
-            
-            task_traj_returns.append(np.mean(traj_returns))
+                #calculate statistics
+                final_task_returns.append(np.mean(final_returns))
+                final_task_lengths.append(np.mean(final_lengths))
+                online_task_returns.append(np.mean(exploration_returns + final_returns))
+                online_task_lengths.append(np.mean(exploration_lengths + final_lengths))
+            all_final_returns.append(np.mean(final_task_returns))
+            all_online_returns.append(np.mean(online_task_returns))
+            all_final_lengths.append(np.mean(final_task_lengths))
+            all_online_lengths.append(np.mean(online_task_lengths))
 
-        eval_traj_mean_return = np.mean(task_traj_returns)
-        return {
-            "performance/eval_return": eval_traj_mean_return
-        }                                                          
+        eval_stats['performance/train final return'] = np.mean(all_final_returns)
+        eval_stats['performance/train final length'] = np.mean(all_final_lengths)
+        eval_stats['performance/train online return'] = np.mean(all_online_returns)
+        eval_stats['performance/train online length'] = np.mean(all_online_lengths)
 
-    def collect_data(self, task_idx, num_samples, resample_z_rate, update_posterior_rate, is_training, initial_z=None, add_to_enc_buffer=False):
+        #eval on eval tasks
+        all_final_returns = []
+        all_online_returns = []
+        all_final_lengths = []
+        all_online_lengths = []
+        for task_idx in self.eval_task_indices:
+            self.env.reset_task(task_idx)
+            final_task_returns = []
+            final_task_lengths = []
+            online_task_returns = []
+            online_task_lengths = []
+            for round in range(self.num_eval_rounds):
+                self.eval_buffer.clear()
+                #initial exploration
+                exploration_returns, exploration_lengths = self.collect_data(task_idx, max_samples=np.inf, resample_z_rate=np.inf, update_posterior_rate=np.inf, is_training=False, initial_z=self.initial_z,  add_to_enc_buffer=True, add_to_replay_buffer=False, max_trajectories=self.num_eval_exploration_trajectories, deterministic=True)
+
+                #eval rollout
+                final_returns, final_lengths = self.collect_data(task_idx, max_samples=np.inf, resample_z_rate=1, update_posterior_rate=1,is_training=False,add_to_enc_buffer=True, add_to_replay_buffer=False,max_trajectories=self.num_eval_trajectories, deterministic=True)
+
+                #calculate statistics
+                final_task_returns.append(np.mean(final_returns))
+                final_task_lengths.append(np.mean(final_lengths))
+                online_task_returns.append(np.mean(exploration_returns + final_returns))
+                online_task_lengths.append(np.mean(exploration_lengths + final_lengths))
+            all_final_returns.append(np.mean(final_task_returns))
+            all_online_returns.append(np.mean(online_task_returns))
+            all_final_lengths.append(np.mean(final_task_lengths))
+            all_online_lengths.append(np.mean(online_task_lengths))
+
+        eval_stats['performance/eval_return'] = np.mean(all_final_returns)
+        eval_stats['performance/eval_length'] = np.mean(all_final_lengths)
+        eval_stats['performance/eval online return'] = np.mean(all_online_returns)
+        eval_stats['performance/eval online length'] = np.mean(all_online_lengths)
+        return eval_stats       
+                                                       
+    @torch.no_grad()
+    def collect_data(self, task_idx, max_samples, resample_z_rate, update_posterior_rate, is_training, initial_z=None, add_to_enc_buffer=False, add_to_replay_buffer=True, max_trajectories=np.inf, deterministic=False):
+        assert max_samples < np.inf or max_trajectories < np.inf
         num_samples_collected = 0
         num_trajectories_collected = 0
         if initial_z is None:
@@ -224,29 +276,31 @@ class PEARLTrainer(BaseTrainer):
             z_var = initial_z['z_var']
             z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
         traj_returns = []
-        while num_samples_collected < num_samples: 
-            deterministic = not is_training
+        traj_lens = []
+        while num_samples_collected < max_samples and num_trajectories_collected < max_trajectories: 
             #rollout one trajectory every time
             curr_traj_samples, traj_return = self.rollout_trajectory(z_sample, deterministic=deterministic)
             num_samples_collected += len(curr_traj_samples['obs_list'])
             traj_returns.append(traj_return)
+            traj_lens.append(len(curr_traj_samples['obs_list']))
             num_trajectories_collected += 1
             #add to buffer
             if is_training:
-                self.train_replay_buffers[task_idx].add_traj(**curr_traj_samples)
+                if add_to_replay_buffer:
+                    self.train_replay_buffers[task_idx].add_traj(**curr_traj_samples)
                 if add_to_enc_buffer:
                     self.train_encoder_buffers[task_idx].add_traj(**curr_traj_samples)
             else:
                 self.eval_buffer.add_traj(**curr_traj_samples)
 
-            if update_posterior_rate !=np.inf and num_trajectories_collected % update_posterior_rate == 0:
+            if update_posterior_rate < np.inf and num_trajectories_collected % update_posterior_rate == 0:
                 #update z posterior inference
                 z_inference_context_batch = self.sample_context([task_idx], is_training=is_training)
                 z_mean, z_var = self.agent.infer_z_posterior(z_inference_context_batch)
                 z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
             if num_trajectories_collected % resample_z_rate == 0:
                 z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
-        return traj_returns
+        return traj_returns, traj_lens
 
     def rollout_trajectory(self, z, deterministic=False):
         obs_list, action_list, next_obs_list, reward_list, done_list = [], [], [], [], []
@@ -262,8 +316,6 @@ class PEARLTrainer(BaseTrainer):
             action_list.append(action)
             next_obs_list.append(next_obs)
             reward_list.append(reward)
-            if traj_length >= self.max_trajectory_length - 1:
-                done = False
             done_list.append(done)
             traj_length += 1
 

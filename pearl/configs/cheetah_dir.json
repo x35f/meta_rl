@@ -11,7 +11,7 @@
     "num_tasks_per_gradient_update": 4,
     "num_steps_prior": 1000, 
     "num_steps_posterior": 0, 
-    "num_extra_rl_steps_posterior": 1000,
+    "num_extra_steps_posterior": 1000,
     "z_inference_batch_size": 256
   },
   "agent":{

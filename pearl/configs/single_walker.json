@@ -8,7 +8,7 @@
     "max_epoch": 1000,
     "batch_size": 100,
     "z_inference_batch_size": 128,
-    "num_updates_per_iteration":800,
+    "num_updates_per_epoch":800,
     "num_tasks_per_gradient_update": 1,
     "num_train_tasks_to_sample_per_iteration": 1,
     "save_video_demo_interval": -1,

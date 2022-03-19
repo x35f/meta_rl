@@ -10,7 +10,7 @@
     "use_same_tasks_for_eval": false
   },
   "replay_buffer":{
-    "max_buffer_size": 1000000
+    "max_buffer_size": 100000
   },
   "encoder_buffer":{
     "max_buffer_size": 100000
@@ -23,17 +23,7 @@
     "use_information_bottleneck": true,
     "kl_lambda": 0.1,
     "alpha": 0.2,
-    "policy_mean_reg_weight":1e-3,
-    "policy_std_reg_weight":1e-3,
-    "policy_pre_activation_weight":0.0,
     "q_network":{
-      "hidden_dims": [300,300, 300],
-      "optimizer_class": "Adam",
-      "learning_rate":0.0003,
-      "act_fn": "relu",
-      "out_act_fn": "identity"
-    },
-    "v_network":{
       "hidden_dims": [300,300, 300],
       "optimizer_class": "Adam",
       "learning_rate":0.0003,
@@ -66,7 +56,7 @@
   "trainer":{
     "batch_size": 256,
     "z_inference_batch_size": 64,
-    "max_epoch": 500,
+    "max_epoch": 1000,
     "num_tasks_per_gradient_update": 16,
     "num_train_tasks_to_sample_per_iteration": 5, 
     "num_steps_prior": 400, 
@@ -76,12 +66,11 @@
     "adaptation_context_update_interval": 1,
     "num_eval_posterior_trajs": 1,
     "max_trajectory_length":200,
-    "eval_interval": 1,
+    "eval_interval": 10,
     "num_eval_trajectories": 5,
-    "num_eval_exploration_trajectories":1, 
     "num_eval_rounds": 2, 
     "snapshot_interval": 10,
-    "num_initial_steps": 2000,
+    "start_timestep": 2000,
     "save_video_demo_interval": -1,
     "log_interval": 1
   }

@@ -2,11 +2,11 @@
   "env_name": "cheetah-vel",
   "common":{
     "num_train_tasks": 10,
-    "num_test_tasks": 5
+    "num_eval_tasks": 5
   },
   "trainer":{
+    "max_epoch": 200,
     "z_inference_batch_size": 100,
-    "batch_size": 256,
-    "num_extra_rl_steps_posterior": 600
+    "num_eval_exploration_trajectories":2
   } 
 }
