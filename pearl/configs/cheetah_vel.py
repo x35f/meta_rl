@@ -1,4 +1,4 @@
-{
+overwrite_args = {
   "env_name": "cheetah-vel",
   "common":{
     "num_train_tasks": 100,

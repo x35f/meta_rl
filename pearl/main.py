@@ -1,12 +1,8 @@
 import os
-import sys
-# sys.path.append(os.path.join(os.getcwd(), './'))
-# sys.path.append(os.path.join(os.getcwd(), '../../'))
-import gym
 import click
 from unstable_baselines.common.logger import Logger
 from unstable_baselines.meta_rl.pearl.trainer import PEARLTrainer
-from unstable_baselines.meta_rl.pearl.agent import PEARLAgent
+from unstable_baselines.meta_rl.pearl.agent import PEARLAgent, OriginalPEARLAgent
 from unstable_baselines.common.util import set_device_and_logger, load_config, set_global_seed
 from unstable_baselines.common.buffer import ReplayBuffer
 from unstable_baselines.common.env_wrapper import get_env, NormalizedBoxEnv
@@ -49,10 +45,11 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     if args['common']['use_same_tasks_for_eval']:
         assert num_eval_tasks == num_train_tasks
         eval_task_indices = train_task_indices
+        env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True))
     else:
         eval_task_indices = [i + num_train_tasks for i in range(num_eval_tasks)]
+        env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks + num_eval_tasks, randomize_tasks=True))
     #the train env and eval env are incoporated for ease of normalization
-    env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks + num_eval_tasks, randomize_tasks=True))
     assert len(env.get_all_task_idx()) == len(set(eval_task_indices + train_task_indices))
     observation_space = env.observation_space
     action_space = env.action_space
@@ -65,8 +62,11 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
 
     #initialize agent
     logger.log_str("Initializing Agent")
-    agent = PEARLAgent(observation_space, action_space, **args['agent'])
-
+    #agent = PEARLAgent(observation_space, action_space, **args['agent'])
+    if args['use_new_sac']:
+        agent = PEARLAgent(observation_space, action_space, **args['agent'])
+    else:
+        agent = OriginalPEARLAgent(observation_space, action_space, **args['agent'])
     #initialize trainer
     logger.log_str("Initializing Trainer")
     trainer  = PEARLTrainer(

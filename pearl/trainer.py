@@ -1,8 +1,6 @@
-from unstable_baselines.common.util import second_to_time_str
 from unstable_baselines.common.trainer import BaseTrainer
 import numpy as np
 from tqdm import trange
-from time import time
 import cv2
 import os
 import random
@@ -10,24 +8,30 @@ import torch
 from unstable_baselines.common import util 
 
 class PEARLTrainer(BaseTrainer):
-    def __init__(self, agent, env, train_task_indices, eval_task_indices, train_replay_buffers, train_encoder_buffers, eval_buffer, load_dir,
-            batch_size,
-            z_inference_batch_size,
+    def __init__(self, agent,
+            env, 
+            train_task_indices,    
+            eval_task_indices,     
+            train_replay_buffers,  
+            train_encoder_buffers, 
+            eval_buffer,           
+            load_dir,               
+            batch_size,             
+            z_inference_batch_size, 
             use_next_obs_in_context,
-            max_epoch,
-            num_tasks_per_gradient_update,
-            num_train_tasks,
-            num_eval_tasks,
-            num_train_tasks_to_sample_per_iteration, 
-            num_steps_prior, 
-            num_steps_posterior, 
-            num_extra_steps_posterior,
-            num_updates_per_epoch,
-            adaptation_context_update_interval,
-            num_eval_posterior_trajs,
-            num_eval_exploration_trajectories,
-            num_initial_steps,
-            num_eval_rounds,
+            max_epoch,              
+            num_tasks_per_gradient_update, 
+            num_train_tasks,       
+            num_eval_tasks,        
+            num_train_tasks_to_sample_per_epoch,  
+            num_steps_prior,        
+            num_steps_posterior,    
+            num_extra_steps_posterior, 
+            num_updates_per_epoch,  
+            adaptation_context_update_interval, 
+            num_eval_exploration_trajectories,  
+            num_initial_steps,  
+            num_eval_rounds,    
             **kwargs):
         super(PEARLTrainer, self).__init__(agent, env, env, **kwargs) #train env is the same as the eval env, train and eval tasks are identified by their indicies
         self.agent = agent
@@ -45,20 +49,19 @@ class PEARLTrainer(BaseTrainer):
         self.num_eval_tasks = num_eval_tasks
         self.max_epoch = max_epoch
         self.num_tasks_per_gradient_update = num_tasks_per_gradient_update
-        self.num_train_tasks_to_sample_per_iteration = num_train_tasks_to_sample_per_iteration
+        self.num_train_tasks_to_sample_per_epoch = num_train_tasks_to_sample_per_epoch
         self.num_steps_prior = num_steps_prior
         self.num_steps_posterior = num_steps_posterior
         self.num_extra_steps_posterior = num_extra_steps_posterior
         self.num_updates_per_epoch = num_updates_per_epoch
         self.adaptation_context_update_interval = adaptation_context_update_interval
-        self.num_eval_posterior_trajs = num_eval_posterior_trajs
         self.num_eval_exploration_trajectories = num_eval_exploration_trajectories
         self.num_eval_rounds = num_eval_rounds
         self.num_initial_steps = num_initial_steps
         self.initial_z = {
                 'z_mean': torch.zeros((1, self.agent.latent_dim), device=util.device),
                 'z_var': torch.ones((1, self.agent.latent_dim), device=util.device)
-                }
+                } # predefine initial z for simplicity of code
         if load_dir != "":
             if  os.path.exists(load_dir):
                 self.agent.load(load_dir)
@@ -88,7 +91,7 @@ class PEARLTrainer(BaseTrainer):
             train_task_returns = []
             train_task_lengths = []
             #sample data from train_tasks
-            for idx in range(self.num_train_tasks_to_sample_per_iteration):
+            for idx in range(self.num_train_tasks_to_sample_per_epoch):
                 task_idx = random.choice(self.train_task_indices) # the same sampling method as the source code
                 self.env.reset_task(task_idx)
                 self.train_encoder_buffers[task_idx].clear()
@@ -105,7 +108,7 @@ class PEARLTrainer(BaseTrainer):
                 # trajectories from the policy handling z ~ posterior
                 if self.num_extra_steps_posterior > 0:
                     assert self.num_steps_prior + self.num_steps_posterior > 0
-                    extra_posterior_returns, extra_posterior_lengths = self.collect_data(task_idx, self.num_extra_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval,  initial_z=self.initial_z, is_training=True, add_to_enc_buffer=False, add_to_replay_buffer=True, max_trajectories=np.inf)
+                    extra_posterior_returns, extra_posterior_lengths = self.collect_data(task_idx, self.num_extra_steps_posterior, resample_z_rate=1, update_posterior_rate=self.adaptation_context_update_interval, is_training=True, add_to_enc_buffer=False, add_to_replay_buffer=True, max_trajectories=np.inf)
                     #does not add to encoder buffer since it's extra posterior
                     #todo: why use initial z
                 
@@ -141,7 +144,6 @@ class PEARLTrainer(BaseTrainer):
     def sample_context(self, indices, is_training):
         if is_training:
             contexts = [self.train_encoder_buffers[idx].sample(batch_size=self.z_inference_batch_size) for idx in indices]
-            # task_num,  [states, actions, next_states, rewards, dones] of length batch_size
         else:
             #sample all contexts for evaluation
             contexts = [self.eval_buffer.sample(self.eval_buffer.max_sample_size)]
@@ -152,8 +154,6 @@ class PEARLTrainer(BaseTrainer):
             contexts = torch.cat(contexts[:-1], dim=2)
         else:
             contexts = torch.cat(contexts[:-2], dim=2)
-        # if not is_training:
-        #     print("contexts:", contexts.shape)
         return contexts
     
     def unpack_context_batch(self, data):
@@ -271,7 +271,7 @@ class PEARLTrainer(BaseTrainer):
             z_inference_context_batch = self.sample_context([task_idx], is_training=is_training)
             z_mean, z_var = self.agent.infer_z_posterior(z_inference_context_batch)
             z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
-        else: # for initialization when no context is available in the buffer
+        else: # for initialization when encoder buffer is empty
             z_mean = initial_z['z_mean']
             z_var = initial_z['z_var']
             z_sample = self.agent.sample_z_from_posterior(z_mean, z_var)
@@ -318,8 +318,6 @@ class PEARLTrainer(BaseTrainer):
             reward_list.append(reward)
             done_list.append(done)
             traj_length += 1
-
-            # IMPORTANT: remember to step the observation :)
             obs = next_obs
         return {
             'obs_list': obs_list, 
