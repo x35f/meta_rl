@@ -29,7 +29,7 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
 
     #initialize logger
     env_name = args['env_name']
-    logger = Logger(log_dir,env_name, prefix = info, print_to_terminal=print_log)
+    logger = Logger(log_dir,env_name, info_str = info, print_to_terminal=print_log)
 
     #set device and logger
     set_device_and_logger(gpu, logger)

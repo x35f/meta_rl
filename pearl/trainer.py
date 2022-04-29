@@ -64,7 +64,7 @@ class PEARLTrainer(BaseTrainer):
                 } # predefine initial z for simplicity of code
         if load_dir != "":
             if  os.path.exists(load_dir):
-                self.agent.load(load_dir)
+                self.agent.load_snapshot(load_dir)
             else:
                 print("Load dir {} Not Found".format(load_dir))
                 exit(0)
