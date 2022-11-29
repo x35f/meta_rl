@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from unstable_baselines.common.agents import BaseAgent
-from unstable_baselines.common.networks import MLPNetwork, PolicyNetworkFactory, get_optimizer
+from unstable_baselines.common.networks import BasicNetwork, PolicyNetworkFactory, get_optimizer
 from .network import TanhGaussianPolicy
 import numpy as np
 from unstable_baselines.common import util, functional
@@ -24,10 +24,10 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
         #initilze networks
         self.latent_dim = kwargs['latent_dim']
-        self.q1_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
-        self.q2_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
-        self.target_q1_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
-        self.target_q2_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
+        self.q1_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
+        self.q2_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
+        self.target_q1_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
+        self.target_q2_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
         self.policy_network = PolicyNetworkFactory.get(obs_dim + self.latent_dim, action_space,  ** kwargs['policy_network'])
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
         if self.use_next_obs_in_context:
