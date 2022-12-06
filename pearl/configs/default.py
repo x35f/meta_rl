@@ -28,21 +28,21 @@ default_args = {
     "policy_std_reg_weight":1e-3,             # for original pearl agent
     "policy_pre_activation_weight":0.0,       # for original pearl agent
     "q_network":{
-      "hidden_dims": [300, 300, 300],
+      "network_params": [("mlp", 300), ("mlp", 300), ("mlp", 300)],
       "optimizer_class": "Adam",
       "learning_rate":0.0003,
       "act_fn": "relu",
       "out_act_fn": "identity"
     },
     "v_network":{
-      "hidden_dims": [300,300, 300],
+      "network_params": [("mlp", 300), ("mlp", 300), ("mlp", 300)],
       "optimizer_class": "Adam",
       "learning_rate":0.0003,
       "act_fn": "relu",
       "out_act_fn": "identity"
     },
     "policy_network":{
-      "hidden_dims": [300, 300, 300],
+      "network_params": [("mlp", 300), ("mlp", 300), ("mlp", 300)],
       "optimizer_class": "Adam",
       "deterministic": False,
       "learning_rate":0.0003,
@@ -52,7 +52,7 @@ default_args = {
       "stablize_log_prob": True
     },
     "context_encoder_network":{
-      "hidden_dims": [200, 200, 200],
+      "network_params": [("mlp", 200), ("mlp", 200), ("mlp", 200)],
       "optimizer_class": "Adam",
       "learning_rate":0.0003,
       "act_fn": "relu",

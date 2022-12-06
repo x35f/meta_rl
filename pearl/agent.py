@@ -2,14 +2,15 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from unstable_baselines.common.agents import BaseAgent
-from unstable_baselines.common.networks import BasicNetwork, PolicyNetworkFactory, get_optimizer
+from unstable_baselines.common.networks import SequentialNetwork, PolicyNetworkFactory, get_optimizer
 from .network import TanhGaussianPolicy
 import numpy as np
 from unstable_baselines.common import util, functional
 from unstable_baselines.common.maths import product_of_gaussians
 from operator import itemgetter
+from gym.spaces import Box
 
-class PEARLAgent(torch.nn.Module, BaseAgent):
+class PEARLAgent(BaseAgent):
     def __init__(self, observation_space, action_space,
         alpha,
         reward_scale,
@@ -24,11 +25,12 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
 
         #initilze networks
         self.latent_dim = kwargs['latent_dim']
-        self.q1_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
-        self.q2_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
-        self.target_q1_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
-        self.target_q2_network = BasicNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
-        self.policy_network = PolicyNetworkFactory.get(obs_dim + self.latent_dim, action_space,  ** kwargs['policy_network'])
+        self.q1_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
+        self.q2_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
+        self.target_q1_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
+        self.target_q2_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
+        policy_input_space = Box(low=observation_space.low[0], high=observation_space.high[0], dtype=observation_space.dtype, shape=(obs_dim + self.latent_dim,))
+        self.policy_network = PolicyNetworkFactory.get(policy_input_space, action_space,  ** kwargs['policy_network'])
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
         if self.use_next_obs_in_context:
             context_encoder_input_dim = 2 * obs_dim + action_dim + 1
@@ -39,7 +41,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             context_encoder_output_dim = kwargs['latent_dim'] * 2
         else:
             context_encoder_output_dim = kwargs['latent_dim']
-        self.context_encoder_network = MLPNetwork(context_encoder_input_dim, context_encoder_output_dim, **kwargs['context_encoder_network'])
+        self.context_encoder_network = SequentialNetwork(context_encoder_input_dim, context_encoder_output_dim, **kwargs['context_encoder_network'])
 
         functional.soft_update_network(self.q1_network, self.target_q1_network, 1.0)
         functional.soft_update_network(self.q2_network, self.target_q2_network, 1.0)
@@ -246,7 +248,7 @@ class PEARLAgent(torch.nn.Module, BaseAgent):
             }
 
 
-class OriginalPEARLAgent(torch.nn.Module, BaseAgent):
+class OriginalPEARLAgent(BaseAgent):
     def __init__(self, observation_space, action_space,
         reward_scale,
         target_smoothing_tau,
@@ -263,10 +265,10 @@ class OriginalPEARLAgent(torch.nn.Module, BaseAgent):
 
         #initilze networks
         self.latent_dim = kwargs['latent_dim']
-        self.q1_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
-        self.q2_network = MLPNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
-        self.v_network = MLPNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
-        self.target_v_network = MLPNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
+        self.q1_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1, **kwargs['q_network'])
+        self.q2_network = SequentialNetwork(obs_dim + action_dim + self.latent_dim, 1,**kwargs['q_network'])
+        self.v_network = SequentialNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
+        self.target_v_network = SequentialNetwork(obs_dim + self.latent_dim, 1,**kwargs['v_network'])
         self.policy_network = TanhGaussianPolicy(obs_dim + self.latent_dim, action_space, **kwargs['policy_network'])
         self.use_next_obs_in_context = kwargs['use_next_obs_in_context']
         if self.use_next_obs_in_context:

@@ -5,7 +5,7 @@ from unstable_baselines.meta_rl.pearl.trainer import PEARLTrainer
 from unstable_baselines.meta_rl.pearl.agent import PEARLAgent, OriginalPEARLAgent
 from unstable_baselines.common.util import set_device_and_logger, load_config, set_global_seed
 from unstable_baselines.common.buffer import ReplayBuffer
-from unstable_baselines.common.env_wrapper import get_env, NormalizedBoxEnv
+from unstable_baselines.common.env_wrapper import get_env, NormalizedBoxEnv, OriNormalizedBoxEnv
 
 
 @click.command(context_settings=dict(
@@ -29,7 +29,7 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
 
     #initialize logger
     env_name = args['env_name']
-    logger = Logger(log_dir,env_name, info_str = info, print_to_terminal=print_log)
+    logger = Logger(log_dir,env_name, seed, info_str = info, print_to_terminal=print_log)
 
     #set device and logger
     set_device_and_logger(gpu, logger)
@@ -45,10 +45,10 @@ def main(config_path, log_dir, gpu, print_log, seed, info, load_dir, args):
     if args['common']['use_same_tasks_for_eval']:
         assert num_eval_tasks == num_train_tasks
         eval_task_indices = train_task_indices
-        env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True))
+        env = OriNormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks, randomize_tasks=True))
     else:
         eval_task_indices = [i + num_train_tasks for i in range(num_eval_tasks)]
-        env = NormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks + num_eval_tasks, randomize_tasks=True))
+        env = OriNormalizedBoxEnv(get_env(env_name, n_tasks=num_train_tasks + num_eval_tasks, randomize_tasks=True))
     #the train env and eval env are incoporated for ease of normalization
     assert len(env.get_all_task_idx()) == len(set(eval_task_indices + train_task_indices))
     observation_space = env.observation_space
